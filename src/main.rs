@@ -43,12 +43,12 @@ fn auto_screenshot(
 
     *frame_count += 1;
     // Wait longer to allow style transfer pipeline to produce output
-    if *frame_count == 180 {
+    if *frame_count == 600 {
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk("screenshot-0.png"));
     }
-    if *frame_count == 190 {
+    if *frame_count == 610 {
         exit.write(AppExit::Success);
     }
 }

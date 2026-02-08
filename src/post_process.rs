@@ -4,7 +4,9 @@ use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy_camera::RenderTarget;
 
 use crate::player::PlayerCamera;
-use crate::style_transfer::{FrameData, StyleChannels, INFERENCE_SIZE};
+use crate::style_transfer::{
+    CurrentStyle, FrameData, StyleChannels, StyleSwitch, RENDER_HEIGHT, RENDER_WIDTH,
+};
 
 #[derive(Resource)]
 pub struct StyleTarget {
@@ -26,6 +28,10 @@ struct CaptureTimer(Timer);
 #[derive(Resource)]
 struct CaptureInFlight(bool);
 
+/// When true, style transfer is bypassed and the raw scene is displayed
+#[derive(Resource)]
+pub struct StyleBypass(pub bool);
+
 pub struct PostProcessPlugin;
 
 impl Plugin for PostProcessPlugin {
@@ -34,6 +40,7 @@ impl Plugin for PostProcessPlugin {
             .add_systems(
                 Update,
                 (
+                    keyboard_style_switch,
                     assign_render_target,
                     periodic_capture,
                     receive_styled_frame,
@@ -45,8 +52,8 @@ impl Plugin for PostProcessPlugin {
 
 fn setup_render_targets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let size = Extent3d {
-        width: INFERENCE_SIZE,
-        height: INFERENCE_SIZE,
+        width: RENDER_WIDTH,
+        height: RENDER_HEIGHT,
         depth_or_array_layers: 1,
     };
 
@@ -82,6 +89,7 @@ fn setup_render_targets(mut commands: Commands, mut images: ResMut<Assets<Image>
         TimerMode::Repeating,
     )));
     commands.insert_resource(CaptureInFlight(false));
+    commands.insert_resource(StyleBypass(false));
 
     // Camera to render UI to the window (scene camera goes to offscreen target)
     commands.spawn((
@@ -161,7 +169,12 @@ fn periodic_capture(
 
     commands
         .spawn(Screenshot::image(style_target.render_image.clone()))
-        .observe(move |trigger: On<ScreenshotCaptured>, mut commands: Commands, mut in_flight: ResMut<CaptureInFlight>| {
+        .observe(move |trigger: On<ScreenshotCaptured>,
+                       mut commands: Commands,
+                       mut in_flight: ResMut<CaptureInFlight>,
+                       bypass: Res<StyleBypass>,
+                       style_target: Res<StyleTarget>,
+                       mut images: ResMut<Assets<Image>>| {
             in_flight.0 = false;
 
             // Despawn the screenshot entity to avoid accumulation
@@ -173,15 +186,22 @@ fn periodic_capture(
                 return;
             }
 
-            let w = image.width();
-            let h = image.height();
+            if bypass.0 {
+                // No style: copy raw pixels directly to display image
+                if let Some(display) = images.get_mut(&style_target.display_image) {
+                    display.data = Some(data.clone());
+                }
+            } else {
+                let w = image.width();
+                let h = image.height();
 
-            let frame = FrameData {
-                pixels: data.clone(),
-                width: w,
-                height: h,
-            };
-            let _ = send_frame.try_send(frame);
+                let frame = FrameData {
+                    pixels: data.clone(),
+                    width: w,
+                    height: h,
+                };
+                let _ = send_frame.try_send(frame);
+            }
         });
 }
 
@@ -190,12 +210,70 @@ fn receive_styled_frame(
     channels: Option<Res<StyleChannels>>,
     style_target: Res<StyleTarget>,
     mut images: ResMut<Assets<Image>>,
+    bypass: Res<StyleBypass>,
 ) {
+    if bypass.0 {
+        // Drain any pending styled frames so the channel doesn't fill up
+        if let Some(channels) = channels {
+            while channels.recv_styled.try_recv().is_ok() {}
+        }
+        return;
+    }
+
     let Some(channels) = channels else { return };
 
     if let Ok(styled) = channels.recv_styled.try_recv() {
         if let Some(image) = images.get_mut(&style_target.display_image) {
             image.data = Some(styled.pixels);
         }
+    }
+}
+
+/// Switch styles with keyboard: 0 = no style, 1-N = specific style
+fn keyboard_style_switch(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut bypass: ResMut<StyleBypass>,
+    mut style: ResMut<CurrentStyle>,
+    channels: Option<Res<StyleChannels>>,
+) {
+    let digit_keys = [
+        (KeyCode::Digit0, 0u32),
+        (KeyCode::Digit1, 1),
+        (KeyCode::Digit2, 2),
+        (KeyCode::Digit3, 3),
+        (KeyCode::Digit4, 4),
+        (KeyCode::Digit5, 5),
+        (KeyCode::Digit6, 6),
+        (KeyCode::Digit7, 7),
+        (KeyCode::Digit8, 8),
+        (KeyCode::Digit9, 9),
+    ];
+
+    for (key, digit) in digit_keys {
+        if !keys.just_pressed(key) {
+            continue;
+        }
+
+        if digit == 0 {
+            bypass.0 = true;
+            info!("Style: OFF (raw scene)");
+            return;
+        }
+
+        let style_idx = (digit - 1) as usize;
+        if style_idx >= style.names.len() {
+            continue;
+        }
+
+        bypass.0 = false;
+        style.index = style_idx;
+        info!("Style: {} ({})", digit, style.names[style_idx]);
+
+        if let Some(ref channels) = channels {
+            let _ = channels
+                .send_switch
+                .try_send(StyleSwitch { index: style_idx });
+        }
+        return;
     }
 }

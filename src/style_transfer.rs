@@ -27,7 +27,22 @@ pub const INFERENCE_SIZE: u32 = 224;
 pub const INFERENCE_SIZE: u32 = 256;
 
 #[cfg(feature = "style-microast")]
-pub const INFERENCE_SIZE: u32 = 256;
+pub const INFERENCE_SIZE: u32 = 512;
+
+/// Render target dimensions — 16:9 aspect ratio at INFERENCE_SIZE height
+pub const RENDER_WIDTH: u32 = INFERENCE_SIZE * 16 / 9;
+pub const RENDER_HEIGHT: u32 = INFERENCE_SIZE;
+
+/// Resize RGBA pixel buffer using Lanczos3 filter
+fn resize_rgba(pixels: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    if src_w == dst_w && src_h == dst_h {
+        return pixels.to_vec();
+    }
+    let img = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec())
+        .expect("resize_rgba: invalid buffer size");
+    let resized = image::imageops::resize(&img, dst_w, dst_h, image::imageops::FilterType::Lanczos3);
+    resized.into_raw()
+}
 
 // ===== Common types (all backends) =====
 
@@ -234,17 +249,19 @@ fn inference_thread_main(
             );
         }
 
-        let w = frame.width as usize;
-        let h = frame.height as usize;
+        let inf = INFERENCE_SIZE as usize;
+
+        // Resize incoming rectangular frame to square for inference
+        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, INFERENCE_SIZE, INFERENCE_SIZE);
 
         // RGBA -> [1, 3, H, W] float32 (0-255 range)
-        let mut input = Array4::<f32>::zeros((1, 3, h, w));
-        for y in 0..h {
-            for x in 0..w {
-                let idx = (y * w + x) * 4;
-                input[[0, 0, y, x]] = frame.pixels[idx] as f32;
-                input[[0, 1, y, x]] = frame.pixels[idx + 1] as f32;
-                input[[0, 2, y, x]] = frame.pixels[idx + 2] as f32;
+        let mut input = Array4::<f32>::zeros((1, 3, inf, inf));
+        for y in 0..inf {
+            for x in 0..inf {
+                let idx = (y * inf + x) * 4;
+                input[[0, 0, y, x]] = square_pixels[idx] as f32;
+                input[[0, 1, y, x]] = square_pixels[idx + 1] as f32;
+                input[[0, 2, y, x]] = square_pixels[idx + 2] as f32;
             }
         }
 
@@ -272,21 +289,24 @@ fn inference_thread_main(
             }
         };
 
-        // [1, 3, H, W] -> RGBA Vec<u8>
-        let mut rgba = vec![255u8; w * h * 4];
-        for y in 0..h {
-            for x in 0..w {
-                let idx = (y * w + x) * 4;
-                rgba[idx] = out_view[[0, 0, y, x]].clamp(0.0, 255.0) as u8;
-                rgba[idx + 1] = out_view[[0, 1, y, x]].clamp(0.0, 255.0) as u8;
-                rgba[idx + 2] = out_view[[0, 2, y, x]].clamp(0.0, 255.0) as u8;
+        // [1, 3, H, W] -> RGBA Vec<u8> (square)
+        let mut square_rgba = vec![255u8; inf * inf * 4];
+        for y in 0..inf {
+            for x in 0..inf {
+                let idx = (y * inf + x) * 4;
+                square_rgba[idx] = out_view[[0, 0, y, x]].clamp(0.0, 255.0) as u8;
+                square_rgba[idx + 1] = out_view[[0, 1, y, x]].clamp(0.0, 255.0) as u8;
+                square_rgba[idx + 2] = out_view[[0, 2, y, x]].clamp(0.0, 255.0) as u8;
             }
         }
 
+        // Resize back to original rectangular dimensions
+        let output_pixels = resize_rgba(&square_rgba, INFERENCE_SIZE, INFERENCE_SIZE, RENDER_WIDTH, RENDER_HEIGHT);
+
         let _ = send.try_send(StyledFrame {
-            pixels: rgba,
-            width: frame.width,
-            height: frame.height,
+            pixels: output_pixels,
+            width: RENDER_WIDTH,
+            height: RENDER_HEIGHT,
         });
     }
 
@@ -403,10 +423,12 @@ fn inference_thread_main_adain(
             info!("AdaIN: style {} encoded", current_style);
         }
 
-        let w = frame.width as usize;
-        let h = frame.height as usize;
+        // Resize incoming rectangular frame to square for inference
+        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, inf_size, inf_size);
+        let w = inf_size as usize;
+        let h = inf_size as usize;
 
-        let content_nd = rgba_to_tensor_01(&frame.pixels, w, h);
+        let content_nd = rgba_to_tensor_01(&square_pixels, w, h);
         let content_tensor = match Tensor::from_array(content_nd) {
             Ok(t) => t,
             Err(e) => {
@@ -458,16 +480,18 @@ fn inference_thread_main_adain(
         };
 
         // The decoder may output a different spatial size due to VGG pooling/upsampling
-        // Get actual output dimensions from tensor shape
         let out_shape = output.shape();
         let out_h = out_shape[2];
         let out_w = out_shape[3];
-        let rgba = tensor_01_to_rgba(&output, out_w, out_h);
+        let square_rgba = tensor_01_to_rgba(&output, out_w, out_h);
+
+        // Resize back to rectangular display dimensions
+        let output_pixels = resize_rgba(&square_rgba, out_w as u32, out_h as u32, RENDER_WIDTH, RENDER_HEIGHT);
 
         let _ = send.try_send(StyledFrame {
-            pixels: rgba,
-            width: out_w as u32,
-            height: out_h as u32,
+            pixels: output_pixels,
+            width: RENDER_WIDTH,
+            height: RENDER_HEIGHT,
         });
     }
 
@@ -551,10 +575,11 @@ fn inference_thread_main_microast(
             info!("MicroAST: style {} loaded", current_style);
         }
 
-        let w = frame.width as usize;
-        let h = frame.height as usize;
+        // Resize incoming rectangular frame to square for inference
+        let inf = INFERENCE_SIZE as usize;
+        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, INFERENCE_SIZE, INFERENCE_SIZE);
 
-        let content = rgba_to_tensor_01(&frame.pixels, w, h);
+        let content = rgba_to_tensor_01(&square_pixels, inf, inf);
         let content_tensor = match Tensor::from_array(content) {
             Ok(t) => t,
             Err(e) => {
@@ -588,12 +613,15 @@ fn inference_thread_main_microast(
             }
         };
 
-        let rgba = tensor_01_to_rgba(&output, w, h);
+        let square_rgba = tensor_01_to_rgba(&output, inf, inf);
+
+        // Resize back to rectangular display dimensions
+        let output_pixels = resize_rgba(&square_rgba, INFERENCE_SIZE, INFERENCE_SIZE, RENDER_WIDTH, RENDER_HEIGHT);
 
         let _ = send.try_send(StyledFrame {
-            pixels: rgba,
-            width: frame.width,
-            height: frame.height,
+            pixels: output_pixels,
+            width: RENDER_WIDTH,
+            height: RENDER_HEIGHT,
         });
     }
 
