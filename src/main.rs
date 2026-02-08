@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_skein::SkeinPlugin;
 
 mod fever;
 mod level;
@@ -20,6 +21,7 @@ fn main() {
         }),
     )
     .add_plugins((
+        SkeinPlugin::default(),
         player::PlayerPlugin,
         level::LevelPlugin,
         style_transfer::StyleTransferPlugin,

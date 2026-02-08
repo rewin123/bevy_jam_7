@@ -17,6 +17,7 @@ crossbeam-channel = "0.5"
 image = "0.25"
 rand = "0.9"
 bevy_camera = "0.18"
+bevy_skein = "0.5"
 
 [profile.dev]
 opt-level = 1
