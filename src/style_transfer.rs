@@ -14,6 +14,21 @@ compile_error!("Features `style-adain` and `style-microast` are mutually exclusi
 #[cfg(not(any(feature = "style-johnson", feature = "style-adain", feature = "style-microast")))]
 compile_error!("Exactly one style backend must be enabled: style-johnson, style-adain, or style-microast");
 
+// ===== Per-backend inference resolution =====
+// Divisibility constraints:
+//   Johnson: fixed 224x224 (ONNX graph has static shape, no dynamic axes)
+//   AdaIN:   /16 (VGG-19 has 4 MaxPool2d stride-2 layers); trained on 256x256 crops
+//   MicroAST: /4 (2 stride-2 depthwise convolutions); trained on 256x256 crops
+
+#[cfg(feature = "style-johnson")]
+pub const INFERENCE_SIZE: u32 = 224;
+
+#[cfg(feature = "style-adain")]
+pub const INFERENCE_SIZE: u32 = 256;
+
+#[cfg(feature = "style-microast")]
+pub const INFERENCE_SIZE: u32 = 256;
+
 // ===== Common types (all backends) =====
 
 pub struct FrameData {
@@ -345,8 +360,6 @@ fn inference_thread_main_adain(
     recv_switch: Receiver<StyleSwitch>,
     style_paths: &[String],
 ) {
-    use crate::post_process::INFERENCE_SIZE;
-
     info!("Inference thread [AdaIN]: loading encoder and decoder...");
     let mut encoder = build_session("assets/models/adain-vgg.onnx");
     let mut decoder = build_session("assets/models/adain-decoder.onnx");
@@ -501,8 +514,6 @@ fn inference_thread_main_microast(
     recv_switch: Receiver<StyleSwitch>,
     style_paths: &[String],
 ) {
-    use crate::post_process::INFERENCE_SIZE;
-
     info!("Inference thread [MicroAST]: loading model...");
     let mut session = build_session("assets/models/microast.onnx");
 

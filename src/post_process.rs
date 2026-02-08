@@ -4,10 +4,7 @@ use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy_camera::RenderTarget;
 
 use crate::player::PlayerCamera;
-use crate::style_transfer::{FrameData, StyleChannels};
-
-/// Resolution for inference — model expects exactly 224x224
-pub const INFERENCE_SIZE: u32 = 224;
+use crate::style_transfer::{FrameData, StyleChannels, INFERENCE_SIZE};
 
 #[derive(Resource)]
 pub struct StyleTarget {
