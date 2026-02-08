@@ -1,3 +1,4 @@
+use avian3d::prelude::*;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -8,7 +9,9 @@ pub struct Player;
 #[derive(Component)]
 pub struct FpsController {
     pub speed: f32,
+    pub jump_impulse: f32,
     pub sensitivity: f32,
+    pub damping: f32,
     pub pitch: f32,
     pub yaw: f32,
 }
@@ -16,8 +19,10 @@ pub struct FpsController {
 impl Default for FpsController {
     fn default() -> Self {
         Self {
-            speed: 10.0,
+            speed: 30.0,
+            jump_impulse: 7.0,
             sensitivity: 0.003,
+            damping: 0.9,
             pitch: 0.0,
             yaw: 0.0,
         }
@@ -27,26 +32,46 @@ impl Default for FpsController {
 #[derive(Component)]
 pub struct PlayerCamera;
 
+/// Marker added/removed each frame based on ground detection.
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+pub struct Grounded;
+
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player)
-            .add_systems(Update, (grab_cursor, player_movement, player_look).chain());
+        app.add_systems(Startup, spawn_player).add_systems(
+            Update,
+            (grab_cursor, update_grounded, player_look, player_movement).chain(),
+        );
     }
 }
 
 fn spawn_player(mut commands: Commands) {
-    // Player entity (invisible, just a transform)
     commands
         .spawn((
             Player,
             FpsController::default(),
-            Transform::from_xyz(0.0, 2.0, 8.0),
+            Transform::from_xyz(0.0, 2.0, 0.0),
             Visibility::default(),
+            // Physics
+            RigidBody::Dynamic,
+            Collider::capsule(0.4, 1.0),
+            LockedAxes::ROTATION_LOCKED,
+            Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
+            Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
+            GravityScale(2.0),
+            // Ground detection via shape cast
+            ShapeCaster::new(
+                Collider::capsule(0.4 * 0.99, 1.0 * 0.99),
+                Vec3::ZERO,
+                Quat::default(),
+                Dir3::NEG_Y,
+            )
+            .with_max_distance(0.2),
         ))
         .with_children(|parent| {
-            // Camera as child
             parent.spawn((
                 PlayerCamera,
                 Camera3d::default(),
@@ -74,39 +99,57 @@ fn grab_cursor(
     }
 }
 
+fn update_grounded(
+    mut commands: Commands,
+    query: Query<(Entity, &ShapeHits), With<Player>>,
+) {
+    for (entity, hits) in &query {
+        let is_grounded = hits.iter().any(|hit| {
+            hit.normal2.angle_between(Vec3::Y).abs() <= 0.8 // ~45 degrees
+        });
+        if is_grounded {
+            commands.entity(entity).insert(Grounded);
+        } else {
+            commands.entity(entity).remove::<Grounded>();
+        }
+    }
+}
+
 fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut query: Query<(&mut Transform, &FpsController), With<Player>>,
+    mut query: Query<(&FpsController, &mut LinearVelocity, Has<Grounded>), With<Player>>,
 ) {
-    for (mut transform, ctrl) in &mut query {
-        let forward = transform.forward().as_vec3();
-        let right = transform.right().as_vec3();
+    for (ctrl, mut lin_vel, is_grounded) in &mut query {
+        let yaw_rot = Quat::from_rotation_y(ctrl.yaw);
 
-        let forward_flat = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-        let right_flat = Vec3::new(right.x, 0.0, right.z).normalize_or_zero();
-
-        let mut direction = Vec3::ZERO;
+        let mut input_dir = Vec3::ZERO;
         if keys.pressed(KeyCode::KeyW) {
-            direction += forward_flat;
+            input_dir.z -= 1.0;
         }
         if keys.pressed(KeyCode::KeyS) {
-            direction -= forward_flat;
-        }
-        if keys.pressed(KeyCode::KeyD) {
-            direction += right_flat;
+            input_dir.z += 1.0;
         }
         if keys.pressed(KeyCode::KeyA) {
-            direction -= right_flat;
+            input_dir.x -= 1.0;
         }
-        if keys.pressed(KeyCode::Space) {
-            direction += Vec3::Y;
+        if keys.pressed(KeyCode::KeyD) {
+            input_dir.x += 1.0;
         }
-        if keys.pressed(KeyCode::ShiftLeft) {
-            direction -= Vec3::Y;
+        let input_dir = input_dir.normalize_or_zero();
+        let world_dir = yaw_rot * input_dir;
+
+        lin_vel.x += world_dir.x * ctrl.speed * time.delta_secs();
+        lin_vel.z += world_dir.z * ctrl.speed * time.delta_secs();
+
+        // Jump
+        if keys.just_pressed(KeyCode::Space) && is_grounded {
+            lin_vel.y = ctrl.jump_impulse;
         }
 
-        transform.translation += direction.normalize_or_zero() * ctrl.speed * time.delta_secs();
+        // XZ damping
+        lin_vel.x *= ctrl.damping;
+        lin_vel.z *= ctrl.damping;
     }
 }
 
@@ -128,6 +171,7 @@ fn player_look(
     ctrl.pitch = (ctrl.pitch - delta.y * ctrl.sensitivity)
         .clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
 
+    // Yaw rotates the player body (physics won't fight this since rotation is locked)
     player_transform.rotation = Quat::from_rotation_y(ctrl.yaw);
 
     let pitch = ctrl.pitch;

@@ -28,21 +28,21 @@ fn fever_tick(
     fever.timer.tick(time.delta());
 
     if fever.timer.just_finished() {
-        let mut rng = rand::rng();
-        let mut new_idx = rng.random_range(0..style.names.len());
-        while new_idx == style.index && style.names.len() > 1 {
-            new_idx = rng.random_range(0..style.names.len());
-        }
+        // let mut rng = rand::rng();
+        // let mut new_idx = rng.random_range(0..style.names.len());
+        // while new_idx == style.index && style.names.len() > 1 {
+        //     new_idx = rng.random_range(0..style.names.len());
+        // }
 
-        info!(
-            "FEVER: Style switching {} -> {}",
-            style.names[style.index], style.names[new_idx]
-        );
+        // info!(
+        //     "FEVER: Style switching {} -> {}",
+        //     style.names[style.index], style.names[new_idx]
+        // );
 
-        style.index = new_idx;
+        // style.index = new_idx;
 
-        if let Some(channels) = channels {
-            let _ = channels.send_switch.try_send(StyleSwitch { index: new_idx });
-        }
+        // if let Some(channels) = channels {
+        //     let _ = channels.send_switch.try_send(StyleSwitch { index: new_idx });
+        // }
     }
 }

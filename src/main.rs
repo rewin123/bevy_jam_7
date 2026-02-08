@@ -1,3 +1,5 @@
+use avian3d::prelude::*;
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_skein::SkeinPlugin;
 
@@ -11,16 +13,22 @@ fn main() {
     let mut app = App::new();
 
     app.add_plugins(
-        DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Fever Dream".into(),
-                resolution: (1280u32, 720u32).into(),
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Fever Dream".into(),
+                    resolution: (1280u32, 720u32).into(),
+                    ..default()
+                }),
+                ..default()
+            })
+            .set(LogPlugin {
+                filter: "ort=error".into(),
                 ..default()
             }),
-            ..default()
-        }),
     )
     .add_plugins((
+        PhysicsPlugins::default(),
         SkeinPlugin::default(),
         player::PlayerPlugin,
         level::LevelPlugin,
