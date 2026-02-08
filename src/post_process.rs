@@ -25,6 +25,10 @@ struct RenderTargetAssigned(bool);
 #[derive(Resource)]
 struct CaptureTimer(Timer);
 
+/// Tracks whether a screenshot capture is currently in-flight
+#[derive(Resource)]
+struct CaptureInFlight(bool);
+
 pub struct PostProcessPlugin;
 
 impl Plugin for PostProcessPlugin {
@@ -80,6 +84,7 @@ fn setup_render_targets(mut commands: Commands, mut images: ResMut<Assets<Image>
         0.1,
         TimerMode::Repeating,
     )));
+    commands.insert_resource(CaptureInFlight(false));
 
     // Camera to render UI to the window (scene camera goes to offscreen target)
     commands.spawn((
@@ -133,6 +138,7 @@ fn periodic_capture(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<CaptureTimer>,
+    mut in_flight: ResMut<CaptureInFlight>,
     style_target: Res<StyleTarget>,
     channels: Option<Res<StyleChannels>>,
 ) {
@@ -143,16 +149,27 @@ fn periodic_capture(
         return;
     }
 
+    // Don't capture if a previous screenshot is still in-flight
+    if in_flight.0 {
+        return;
+    }
+
     // Don't capture if inference is still processing
     if channels.send_frame.is_full() {
         return;
     }
 
+    in_flight.0 = true;
     let send_frame = channels.send_frame.clone();
 
     commands
         .spawn(Screenshot::image(style_target.render_image.clone()))
-        .observe(move |trigger: On<ScreenshotCaptured>| {
+        .observe(move |trigger: On<ScreenshotCaptured>, mut commands: Commands, mut in_flight: ResMut<CaptureInFlight>| {
+            in_flight.0 = false;
+
+            // Despawn the screenshot entity to avoid accumulation
+            commands.entity(trigger.event_target()).despawn();
+
             let image = &trigger.image;
             let Some(ref data) = image.data else { return };
             if data.is_empty() {
