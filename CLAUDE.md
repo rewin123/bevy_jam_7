@@ -31,6 +31,15 @@ Bevy рендерит 3D → Screenshot API (100ms) → CPU → ort inference th
 - `style-adain` — произвольные стили из `assets/styles/`, 256x256, 0-1
 - `style-microast` — лёгкая модель, произвольные стили, 512x512, 0-1
 
+## Системные зависимости (Linux)
+
+```bash
+apt-get install -y \
+  pkg-config libwayland-dev libxkbcommon-dev libasound2-dev \
+  libudev-dev libvulkan-dev libx11-dev libxrandr-dev \
+  libxi-dev libxcursor-dev libxinerama-dev libssl-dev libfontconfig-dev
+```
+
 ## Сборка и запуск
 
 ```bash
