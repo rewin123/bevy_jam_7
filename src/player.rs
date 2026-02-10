@@ -1,4 +1,5 @@
 use avian3d::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -49,6 +50,8 @@ impl Plugin for PlayerPlugin {
 }
 
 fn spawn_player(mut commands: Commands) {
+    // Player: membership = bit 0 (player/default), filter = bit 0 + bit 1 (world_0)
+    // The filter gets updated by ChangeWorldLayer at runtime.
     commands
         .spawn((
             Player,
@@ -58,6 +61,7 @@ fn spawn_player(mut commands: Commands) {
             // Physics
             RigidBody::Dynamic,
             Collider::capsule(0.4, 1.0),
+            CollisionLayers::from_bits(1, 1 | (1 << 1)), // member=default, filter=default+world_0
             LockedAxes::ROTATION_LOCKED,
             Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
             Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
@@ -72,11 +76,14 @@ fn spawn_player(mut commands: Commands) {
             .with_max_distance(0.2),
         ))
         .with_children(|parent| {
+            // Camera: layer 0 (shared/UI) + layer 1 (world_0)
+            // Updated by ChangeWorldLayer at runtime.
             parent.spawn((
                 PlayerCamera,
                 Camera3d::default(),
                 Camera::default(),
                 Transform::from_xyz(0.0, 0.8, 0.0),
+                RenderLayers::layer(0).with(1),
             ));
         });
 }

@@ -1,8 +1,9 @@
 use avian3d::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 
-use crate::world_layer::ChangeWorldLayer;
+use crate::world_layer::{ChangeWorldLayer, MAX_WORLDS};
 
 /// Marker: place on an empty in Blender to set the player spawn point.
 #[derive(Component, Reflect, Default, Debug)]
@@ -66,18 +67,18 @@ fn with_auto_mesh(
 }
 
 fn on_scene_ready(
-    trigger: On<SceneInstanceReady>,
-    children: Query<&Children>,
-    player_starts: Query<&GlobalTransform, With<PlayerStart>>,
-    auto_colliders: Query<(Entity, &Mesh3d), With<AutoMeshCollider>>,
-    meshes: Res<Assets<Mesh>>,
-    mut player_q: Query<&mut Transform, With<crate::player::Player>>,
+    _trigger: On<SceneInstanceReady>,
     mut commands: Commands,
 ) {
-   commands.write_message(ChangeWorldLayer(0));
+    commands.write_message(ChangeWorldLayer(0));
 }
 
 fn spawn_lighting(mut commands: Commands) {
+    // Light must be on ALL render layers (0 = shared, 1..=MAX_WORLDS = world layers)
+    let all_layers = RenderLayers::from_layers(
+        &(0..=MAX_WORLDS).collect::<Vec<_>>(),
+    );
+
     commands.spawn((
         DirectionalLight {
             illuminance: 10000.0,
@@ -85,6 +86,7 @@ fn spawn_lighting(mut commands: Commands) {
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.5, 0.0)),
+        all_layers,
     ));
 
     commands.insert_resource(GlobalAmbientLight {

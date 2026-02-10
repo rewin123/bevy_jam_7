@@ -13,21 +13,25 @@ impl Plugin for TriggersPlugin {
 }
 
 
-/// Marker: place on mesh objects in Blender to auto-generate trimesh colliders.
+/// Trigger zone: place on objects in Blender, configurable via Skein.
+/// When the player enters, fires a NamedEvent and optionally switches world.
 #[derive(Component, Reflect, Debug)]
 #[reflect(Component, Default)]
 pub struct CubeTrigger {
     pub size: f32,
     pub trigger_name: String,
-    pub destroy_on_trigger: bool
+    pub destroy_on_trigger: bool,
+    /// World index to switch to (0..7). Set to -1 to not switch.
+    pub switch_to_world: i32,
 }
 
 impl Default for CubeTrigger {
     fn default() -> Self {
-        Self { 
+        Self {
             size: 2.0,
             trigger_name: String::new(),
-            destroy_on_trigger: false
+            destroy_on_trigger: false,
+            switch_to_world: -1,
         }
     }
 }
@@ -79,11 +83,13 @@ fn trigger_collision(
     if let Some(body) = trigger.body2 {
         if q_players.contains(body) {
             commands.trigger(NamedEvent {
-                name: cube_trigger.trigger_name.clone()
+                name: cube_trigger.trigger_name.clone(),
             });
-            info!("Trigger named trigger {}", cube_trigger.trigger_name.clone());
+            info!("Trigger: {}", cube_trigger.trigger_name);
 
-            commands.write_message(ChangeWorldLayer(1));
+            if cube_trigger.switch_to_world >= 0 {
+                commands.write_message(ChangeWorldLayer(cube_trigger.switch_to_world as u32));
+            }
         }
     }
 }
