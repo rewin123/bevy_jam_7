@@ -55,6 +55,12 @@ def total_variation_loss(y: torch.Tensor) -> torch.Tensor:
     )
 
 
+def pixel_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Direct pixel-level MSE for color preservation. [B,3,H,W] in [0,1]."""
+    n, c, h, w = output.shape
+    return (output - target).pow(2).sum() / (c * h * w)
+
+
 def rgb_to_luminance(x: torch.Tensor) -> torch.Tensor:
     """RGB to luminance using ITU-R BT.709 coefficients. Input: [N,3,H,W]."""
     return x[:, 0] * 0.2126 + x[:, 1] * 0.7152 + x[:, 2] * 0.0722

@@ -107,7 +107,7 @@ class Model5Seq(SequenceStyleModel):
         )
 
     def train_resolution(self) -> tuple[int, int]:
-        return (512, 512)
+        return (288, 512)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
