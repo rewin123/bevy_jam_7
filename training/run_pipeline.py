@@ -42,7 +42,7 @@ from utils.losses import (
     output_temporal_loss,
     feature_temporal_loss,
 )
-from utils.optical_flow import occlusion_mask_from_flow
+from utils.optical_flow import occlusion_mask_from_flow, warp_optical_flow
 from utils.transforms import FlowAwareResize, FlowAwareRandomHorizontalFlip, FlowAwareToTensor
 
 # =============================================================================
@@ -334,12 +334,107 @@ def train():
                         grid = torchvision.utils.make_grid(
                             [images[0].cpu(), sample_out[0].cpu()], nrow=2
                         )
+                        writer.add_image("train/content_vs_styled", grid, global_step)
                     else:
                         sample_out = model(frame[:1])
-                        grid = torchvision.utils.make_grid(
-                            [frame[0].cpu(), sample_out[0].cpu()], nrow=2
+
+                        # --- Debug visualizations for sequence mode ---
+                        _b = 0  # batch index to visualize
+
+                        # 1) Frame pair + styled outputs
+                        grid_frames = torchvision.utils.make_grid(
+                            [frame[_b].cpu(), prev_frame[_b].cpu(),
+                             out_t[_b].cpu(), out_t1[_b].cpu()],
+                            nrow=2,
                         )
-                    writer.add_image("train/content_vs_styled", grid, global_step)
+                        writer.add_image("seq/frames_and_outputs", grid_frames, global_step)
+
+                        # 2) Optical flow as color image (Middlebury encoding)
+                        def flow_to_rgb(f):
+                            """Convert [H,W,2] flow to [3,H,W] RGB."""
+                            fx, fy = f[..., 0], f[..., 1]
+                            mag = (fx**2 + fy**2).sqrt()
+                            max_mag = mag.max().clamp(min=1.0)
+                            angle = torch.atan2(fy, fx)  # [-pi, pi]
+                            h_val = (angle / (2 * 3.14159) + 0.5) % 1.0  # [0,1]
+                            s_val = (mag / max_mag).clamp(0, 1)
+                            v_val = torch.ones_like(s_val)
+                            # HSV -> RGB (simplified)
+                            hi = (h_val * 6).long() % 6
+                            f_frac = h_val * 6 - hi.float()
+                            p = v_val * (1 - s_val)
+                            q = v_val * (1 - f_frac * s_val)
+                            t_val = v_val * (1 - (1 - f_frac) * s_val)
+                            r = torch.where(hi == 0, v_val, torch.where(hi == 1, q, torch.where(hi == 2, p, torch.where(hi == 3, p, torch.where(hi == 4, t_val, v_val)))))
+                            g = torch.where(hi == 0, t_val, torch.where(hi == 1, v_val, torch.where(hi == 2, v_val, torch.where(hi == 3, q, torch.where(hi == 4, p, p)))))
+                            b = torch.where(hi == 0, p, torch.where(hi == 1, p, torch.where(hi == 2, t_val, torch.where(hi == 3, v_val, torch.where(hi == 4, v_val, q)))))
+                            return torch.stack([r, g, b], dim=0)
+
+                        flow_fwd_rgb = flow_to_rgb(flow[_b].cpu())
+                        flow_rev_rgb = flow_to_rgb(rev_flow[_b].cpu())
+                        grid_flow = torchvision.utils.make_grid(
+                            [flow_fwd_rgb, flow_rev_rgb], nrow=2,
+                        )
+                        writer.add_image("seq/flow_fwd_rev", grid_flow, global_step)
+
+                        # 3) Occlusion mask
+                        occ_vis = occ_mask[_b].cpu().expand(3, -1, -1)  # [1,H,W] -> [3,H,W]
+                        writer.add_image("seq/occlusion_mask", occ_vis, global_step)
+
+                        # 4) Warped frames (how well flow aligns prev→curr)
+                        warped_prev_input = warp_optical_flow(prev_frame[:1], rev_flow[:1])
+                        warped_prev_output = warp_optical_flow(out_t1[:1], rev_flow[:1])
+                        grid_warp = torchvision.utils.make_grid(
+                            [frame[_b].cpu(), warped_prev_input[_b].cpu(),
+                             out_t[_b].cpu(), warped_prev_output[_b].cpu()],
+                            nrow=2,
+                        )
+                        writer.add_image("seq/curr_vs_warped_prev", grid_warp, global_step)
+
+                        # 5) output_temporal_loss internals
+                        int_in_t = frame[_b:_b+1] * 2 - 1
+                        int_in_t1 = prev_frame[_b:_b+1] * 2 - 1
+                        int_out_t = out_t[_b:_b+1] * 2 - 1
+                        int_out_t1 = out_t1[_b:_b+1] * 2 - 1
+                        rev_f = rev_flow[_b:_b+1]
+                        occ_m = occ_mask[_b:_b+1]
+
+                        input_diff = int_in_t - warp_optical_flow(int_in_t1, rev_f)
+                        output_diff = int_out_t - warp_optical_flow(int_out_t1, rev_f)
+                        luminance = (input_diff[:, 0] * 0.2126 + input_diff[:, 1] * 0.7152 + input_diff[:, 2] * 0.0722).unsqueeze(1)
+                        temporal_error = occ_m * (output_diff - luminance)
+
+                        def to_vis(t):
+                            """Normalize tensor to [0,1] for visualization."""
+                            t = t[0].cpu()
+                            if t.shape[0] == 1:
+                                t = t.expand(3, -1, -1)
+                            t_min, t_max = t.min(), t.max()
+                            if t_max - t_min > 1e-8:
+                                t = (t - t_min) / (t_max - t_min)
+                            else:
+                                t = t * 0
+                            return t
+
+                        grid_temporal = torchvision.utils.make_grid(
+                            [to_vis(input_diff), to_vis(luminance),
+                             to_vis(output_diff), to_vis(temporal_error)],
+                            nrow=2,
+                        )
+                        writer.add_image("seq/temporal_internals", grid_temporal, global_step)
+
+                        # 6) Temporal error heatmap (squared magnitude)
+                        err_sq = temporal_error.pow(2).sum(dim=1, keepdim=True)  # [1,1,H,W]
+                        err_sq = err_sq[0, 0].cpu()  # [H,W]
+                        err_max = err_sq.max().clamp(min=1e-8)
+                        err_norm = (err_sq / err_max)
+                        # Colormap: black → red → yellow
+                        r_ch = (err_norm * 2).clamp(0, 1)
+                        g_ch = (err_norm * 2 - 1).clamp(0, 1)
+                        b_ch = torch.zeros_like(err_norm)
+                        heatmap = torch.stack([r_ch, g_ch, b_ch], dim=0)
+                        writer.add_image("seq/temporal_error_heatmap", heatmap, global_step)
+
                     model.train()
 
             # Save best model
