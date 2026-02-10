@@ -2,6 +2,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 
+use crate::world_layer::ChangeWorldLayer;
+
 /// Marker: place on an empty in Blender to set the player spawn point.
 #[derive(Component, Reflect, Default, Debug)]
 #[reflect(Component)]
@@ -27,7 +29,7 @@ fn spawn_blender_level(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands
         .spawn(SceneRoot(
             asset_server.load(GltfAssetLabel::Scene(0).from_asset("levels/Untitled.glb")),
-        ));
+        )).observe(on_scene_ready);
 }
 
 
@@ -72,30 +74,7 @@ fn on_scene_ready(
     mut player_q: Query<&mut Transform, With<crate::player::Player>>,
     mut commands: Commands,
 ) {
-    for entity in children.iter_descendants(trigger.event_target()) {
-        // PlayerStart — teleport player
-        if let Ok(gt) = player_starts.get(entity) {
-            let pos = gt.translation();
-            info!("PlayerStart found at {pos}");
-            if let Ok(mut t) = player_q.single_mut() {
-                t.translation = pos;
-            }
-        }
-
-        // AutoMeshCollider — generate trimesh collider
-        if let Ok((e, mesh_handle)) = auto_colliders.get(entity) {
-            if let Some(mesh) = meshes.get(&mesh_handle.0) {
-                if let Some(collider) = Collider::trimesh_from_mesh(mesh) {
-                    commands.entity(e).insert((RigidBody::Static, collider));
-                    info!("AutoMeshCollider: added trimesh collider to {e}");
-                } else {
-                    warn!("AutoMeshCollider: failed to generate trimesh for {e}");
-                }
-            } else {
-                warn!("AutoMeshCollider: mesh not loaded for {e}");
-            }
-        }
-    }
+   commands.write_message(ChangeWorldLayer(0));
 }
 
 fn spawn_lighting(mut commands: Commands) {

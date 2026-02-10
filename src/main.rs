@@ -3,11 +3,7 @@ use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy_skein::SkeinPlugin;
 
-mod fever;
-mod level;
-mod player;
-mod post_process;
-mod style_transfer;
+use fever_dream::*;
 
 fn main() {
     let mut app = App::new();
@@ -35,6 +31,8 @@ fn main() {
         style_transfer::StyleTransferPlugin,
         post_process::PostProcessPlugin,
         fever::FeverPlugin,
+        triggers::TriggersPlugin,
+        world_layer::WorldLayerPlugin
     ));
 
     if std::env::args().any(|a| a == "--screenshot-and-exit") {
@@ -43,6 +41,8 @@ fn main() {
 
     app.run();
 }
+
+
 
 fn auto_screenshot(
     mut commands: Commands,
