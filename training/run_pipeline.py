@@ -94,9 +94,10 @@ WARMUP_STYLE   = (100, 200)    # steps 0..100: STYLE_WEIGHT ramps 0→1
 WARMUP_LAMBDA_F = (200, 300) # steps 100..200: LAMBDA_F ramps 0→1
 WARMUP_LAMBDA_O = (200, 300) # steps 200..300: LAMBDA_O ramps 0→1
 
-# Logging
-LOG_INTERVAL = 25      # log losses every N steps
-IMAGE_INTERVAL = 100   # save sample images every N steps
+# Checkpoints & Logging
+CHECKPOINT_INTERVAL = 200  # save checkpoint every N steps
+LOG_INTERVAL = 25          # log losses every N steps
+IMAGE_INTERVAL = 100       # save sample images every N steps
 
 # =============================================================================
 
@@ -224,16 +225,26 @@ def train():
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-    # TensorBoard + output dirs
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Derive style name for output directory
     from datetime import datetime
     if len(style_paths) == 1:
         style_name = os.path.splitext(os.path.basename(style_paths[0]))[0]
     else:
-        style_name = f"{len(style_paths)}styles"
+        # Use parent directory name if it's a directory, otherwise count
+        if isinstance(STYLE_IMAGES, str) and os.path.isdir(STYLE_IMAGES):
+            style_name = os.path.basename(os.path.normpath(STYLE_IMAGES))
+        else:
+            style_name = f"{len(style_paths)}styles"
+
+    # Output: output/{style_name}/
+    style_output_dir = os.path.join(OUTPUT_DIR, style_name)
+    os.makedirs(style_output_dir, exist_ok=True)
+
+    # TensorBoard
     run_name = f"{MODEL_TYPE}_{style_name}_{datetime.now():%Y%m%d_%H%M%S}"
     run_dir = os.path.join(TENSORBOARD_DIR, run_name)
     writer = SummaryWriter(run_dir)
+    print(f"Style output dir: {style_output_dir}")
     print(f"TensorBoard run: {run_dir}")
 
     # Test image for visualization
@@ -474,10 +485,16 @@ def train():
 
                     model.train()
 
+            # Save checkpoint every N steps
+            if global_step > 0 and global_step % CHECKPOINT_INTERVAL == 0:
+                ckpt_path = os.path.join(style_output_dir, f"checkpoint_{global_step}.pth")
+                torch.save(model.state_dict(), ckpt_path)
+                print(f"  Saved checkpoint: {ckpt_path}")
+
             # Save best model
             if total.item() < best_loss:
                 best_loss = total.item()
-                torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, "best_model.pth"))
+                torch.save(model.state_dict(), os.path.join(style_output_dir, "best_model.pth"))
 
             global_step += 1
 
@@ -489,9 +506,9 @@ def train():
         print(f"Epoch {epoch+1}/{EPOCHS} — avg loss: {avg_loss:.4f}")
 
     # Save final model
-    torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, "final_model.pth"))
+    torch.save(model.state_dict(), os.path.join(style_output_dir, "final_model.pth"))
     writer.close()
-    print(f"Training complete. Models saved to {OUTPUT_DIR}/")
+    print(f"Training complete. Models saved to {style_output_dir}/")
 
 
 if __name__ == "__main__":
