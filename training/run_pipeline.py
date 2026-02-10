@@ -46,11 +46,44 @@ from utils.transforms import FlowAwareResize, FlowAwareRandomHorizontalFlip, Flo
 # CONFIG — edit these variables to configure training
 # =============================================================================
 
-# Model: "model5" (single-frame, ~20K params) or "model5_seq" (sequence, ~50K)
+
+class Timeline:
+    """Piecewise-linear parameter schedule.
+
+    Takes a list of (step, value) keyframes sorted by step.
+    Linearly interpolates between keyframes.
+    Before the first keyframe — holds first value.
+    After the last keyframe — holds last value.
+
+    Static value: Timeline([(0, val)])
+    Warm-up:      Timeline([(0, 0), (1000, 0), (2000, 5.0)])
+    """
+
+    def __init__(self, keyframes: list[tuple[int, float]]):
+        assert keyframes, "Timeline must have at least one keyframe"
+        self.steps = [s for s, _ in keyframes]
+        self.values = [v for _, v in keyframes]
+
+    def at(self, step: int) -> float:
+        if step <= self.steps[0]:
+            return self.values[0]
+        if step >= self.steps[-1]:
+            return self.values[-1]
+        for i in range(len(self.steps) - 1):
+            if self.steps[i] <= step < self.steps[i + 1]:
+                t = (step - self.steps[i]) / (self.steps[i + 1] - self.steps[i])
+                return self.values[i] + t * (self.values[i + 1] - self.values[i])
+        return self.values[-1]
+
+    def __repr__(self) -> str:
+        kf = ", ".join(f"{s}:{v:.4g}" for s, v in zip(self.steps, self.values))
+        return f"Timeline([{kf}])"
+
+
+# Model
 MODEL_TYPE = "model5_seq"
 
 # Style images: single path, list of paths, or directory
-# Multiple images → Gram matrices are averaged for a more robust style target
 STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/candy.jpg")
 
 # Dataset paths
@@ -58,7 +91,7 @@ COCO_DIR = "data/coco2017/val2017"
 SINTEL_DIR = "data/sintel"
 FLYING_CHAIRS_DIR = "data/FlyingChairs_release"
 
-# VGG16 weights (downloaded by download_data.sh)
+# VGG16 weights
 VGG16_WEIGHTS = "data/vgg16.pth"
 
 # Output
@@ -68,43 +101,35 @@ TENSORBOARD_DIR = "runs"
 # Training
 TOTAL_STEPS = 50_000
 BATCH_SIZE = 4
-LR = 1e-3
 NUM_WORKERS = 4
 
-# Loss weights
-CONTENT_WEIGHT = 2e4
-STYLE_WEIGHT = 1e5
-TV_WEIGHT = 1e-5
-PIXEL_WEIGHT = 1.0    # pixel-level color preservation (no warm-up)
-LAMBDA_F = 1e5         # feature temporal loss weight
-LAMBDA_O = 2e5         # output temporal loss weight
+# All timelines: list of (step, value) with linear interpolation
+LR             = Timeline([(0, 1e-3)])
+GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 
-# Loss warm-up schedule
-# Each weight ramps linearly from 0 to full over its range of steps.
-# Content and pixel are always at full weight; the others phase in.
-WARMUP_STYLE    = (300, 500)
-WARMUP_LAMBDA_F = (700, 800)
-WARMUP_LAMBDA_O = (800, 900)
+bw = 100
 
-# Dataset sampling weights (relative, will be normalized within each group)
+style_scale = 1e3 # Style has different scaling, we need this parameter 
+content_scale = 1e-1
+
+# Loss weights (all losses are .mean()-normalized, raw values ~O(1))
+CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
+STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 10.0 * style_scale)])
+TV_WEIGHT      = Timeline([(400, 0.0), (500, 1.0)])
+PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.1)])
+LAMBDA_F       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 1.0)])
+LAMBDA_O       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 2.0)])
+
+# Dataset sampling weights (relative, normalized within each group)
 VIDEO_DATASET_WEIGHTS = {"sintel": 1.0, "chairs": 1.0}
 STATIC_DATASET_WEIGHTS = {"coco": 1.0}
 
 # Checkpoints & Logging
-CHECKPOINT_INTERVAL = 200   # save checkpoint every N steps
-LOG_INTERVAL = 25           # log losses every N steps
-IMAGE_INTERVAL = 100        # save sample images every N steps
+CHECKPOINT_INTERVAL = 200
+LOG_INTERVAL = 25
+IMAGE_INTERVAL = 100
 
 # =============================================================================
-
-
-def warmup_factor(step: int, start: int, end: int) -> float:
-    """Linear ramp from 0.0 to 1.0 over [start, end) steps."""
-    if step < start:
-        return 0.0
-    if step >= end:
-        return 1.0
-    return (step - start) / (end - start)
 
 
 def build_model(model_type: str):
@@ -218,7 +243,7 @@ def train():
         print(f"  {name}: {len(ds)} samples")
 
     # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR.at(0))
 
     # Derive style name for output directory
     from datetime import datetime
@@ -245,6 +270,20 @@ def train():
     pbar = tqdm(range(TOTAL_STEPS), desc="Training")
     for global_step in pbar:
 
+        # Sample all timeline values for this step
+        w_content = CONTENT_WEIGHT.at(global_step)
+        w_style = STYLE_WEIGHT.at(global_step)
+        w_tv = TV_WEIGHT.at(global_step)
+        w_pixel = PIXEL_WEIGHT.at(global_step)
+        w_lambda_f = LAMBDA_F.at(global_step)
+        w_lambda_o = LAMBDA_O.at(global_step)
+        lr = LR.at(global_step)
+        grad_max_norm = GRAD_MAX_NORM.at(global_step)
+
+        # Update learning rate
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
+
         # =====================================================================
         # Video batch: content + style + TV + pixel + temporal
         # =====================================================================
@@ -268,22 +307,18 @@ def train():
         vgg_in_t1 = vgg(preprocess_for_vgg(prev_frame))
         vgg_out_t1 = vgg(preprocess_for_vgg(out_t1))
 
-        w_style = warmup_factor(global_step, *WARMUP_STYLE)
-        w_lambda_f = warmup_factor(global_step, *WARMUP_LAMBDA_F)
-        w_lambda_o = warmup_factor(global_step, *WARMUP_LAMBDA_O)
-
-        vid_c_loss = CONTENT_WEIGHT * (
+        vid_c_loss = w_content * (
             content_loss(vgg_out_t[2], vgg_in_t[2])
             + content_loss(vgg_out_t1[2], vgg_in_t1[2])
         )
-        vid_s_loss = STYLE_WEIGHT * w_style * (
+        vid_s_loss = w_style * (
             style_loss(vgg_out_t, style_grams)
             + style_loss(vgg_out_t1, style_grams)
         )
-        vid_tv_loss = TV_WEIGHT * (
+        vid_tv_loss = w_tv * (
             total_variation_loss(out_t) + total_variation_loss(out_t1)
         )
-        vid_p_loss = PIXEL_WEIGHT * (
+        vid_p_loss = w_pixel * (
             pixel_loss(out_t, frame) + pixel_loss(out_t1, prev_frame)
         )
 
@@ -292,10 +327,10 @@ def train():
         internal_out_t = out_t * 2 - 1
         internal_out_t1 = out_t1 * 2 - 1
 
-        f_temp = LAMBDA_F * w_lambda_f * feature_temporal_loss(
+        f_temp = w_lambda_f * feature_temporal_loss(
             feat_t, feat_t1, rev_flow, occ_mask
         )
-        o_temp = LAMBDA_O * w_lambda_o * output_temporal_loss(
+        o_temp = w_lambda_o * output_temporal_loss(
             internal_in_t, internal_in_t1,
             internal_out_t, internal_out_t1,
             rev_flow, occ_mask,
@@ -315,10 +350,10 @@ def train():
         vgg_in_s = vgg(preprocess_for_vgg(images))
         vgg_out_s = vgg(preprocess_for_vgg(sta_output))
 
-        sta_c_loss = CONTENT_WEIGHT * content_loss(vgg_out_s[2], vgg_in_s[2])
-        sta_s_loss = STYLE_WEIGHT * w_style * style_loss(vgg_out_s, style_grams)
-        sta_tv_loss = TV_WEIGHT * total_variation_loss(sta_output)
-        sta_p_loss = PIXEL_WEIGHT * pixel_loss(sta_output, images)
+        sta_c_loss = w_content * content_loss(vgg_out_s[2], vgg_in_s[2])
+        sta_s_loss = w_style * style_loss(vgg_out_s, style_grams)
+        sta_tv_loss = w_tv * total_variation_loss(sta_output)
+        sta_p_loss = w_pixel * pixel_loss(sta_output, images)
 
         static_total = sta_c_loss + sta_s_loss + sta_tv_loss + sta_p_loss
 
@@ -329,9 +364,10 @@ def train():
 
         optimizer.zero_grad()
         total.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_max_norm)
         optimizer.step()
 
-        pbar.set_postfix(loss=f"{total.item():.2f}")
+        pbar.set_postfix(loss=f"{total.item():.2f}", grad=f"{grad_norm:.2f}")
 
         # TensorBoard logging
         if global_step % LOG_INTERVAL == 0:
@@ -349,9 +385,15 @@ def train():
                 "static/pixel": sta_p_loss.item(),
                 "static/total": static_total.item(),
                 "total": total.item(),
-                "warmup/style": w_style,
-                "warmup/lambda_f": w_lambda_f,
-                "warmup/lambda_o": w_lambda_o,
+                "weight/content": w_content,
+                "weight/style": w_style,
+                "weight/tv": w_tv,
+                "weight/pixel": w_pixel,
+                "weight/lambda_f": w_lambda_f,
+                "weight/lambda_o": w_lambda_o,
+                "weight/lr": lr,
+                "weight/grad_max_norm": grad_max_norm,
+                "grad_norm": grad_norm.item(),
             }
             for name, val in losses_dict.items():
                 writer.add_scalar(f"loss/{name}", val, global_step)

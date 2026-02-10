@@ -9,7 +9,7 @@ Sequence-frame losses (additive):
   - output_temporal_loss: luminance-weighted warped output difference
   - feature_temporal_loss: warped encoder feature difference
 
-Based on ReCoNet/train.py and ReCoNet/utils.py.
+All losses use .mean() normalization (averaged over all dims including batch).
 """
 
 import torch
@@ -31,34 +31,32 @@ def gram_matrix(feature_map: torch.Tensor) -> torch.Tensor:
 
 def content_loss(output_features: torch.Tensor, target_features: torch.Tensor) -> torch.Tensor:
     """MSE between feature maps (content preservation)."""
-    n, c, h, w = output_features.shape
-    return (output_features - target_features).pow(2).sum() / (c * h * w)
+    return (output_features - target_features).pow(2).mean()
 
 
 def style_loss(
     output_features_list: list[torch.Tensor],
     style_gram_matrices: list[torch.Tensor],
 ) -> torch.Tensor:
-    """Sum of Gram matrix MSE across VGG layers."""
+    """Mean of Gram matrix MSE across VGG layers."""
     loss = torch.tensor(0.0, device=output_features_list[0].device)
     for out_feat, style_gm in zip(output_features_list, style_gram_matrices):
         out_gm = gram_matrix(out_feat)
-        loss = loss + (out_gm - style_gm).pow(2).sum()
+        loss = loss + (out_gm - style_gm).pow(2).mean()
     return loss
 
 
 def total_variation_loss(y: torch.Tensor) -> torch.Tensor:
     """Total variation regularizer for smoothness."""
     return (
-        torch.sum(torch.abs(y[:, :, :, :-1] - y[:, :, :, 1:]))
-        + torch.sum(torch.abs(y[:, :, :-1, :] - y[:, :, 1:, :]))
+        torch.mean(torch.abs(y[:, :, :, :-1] - y[:, :, :, 1:]))
+        + torch.mean(torch.abs(y[:, :, :-1, :] - y[:, :, 1:, :]))
     )
 
 
 def pixel_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Direct pixel-level MSE for color preservation. [B,3,H,W] in [0,1]."""
-    n, c, h, w = output.shape
-    return (output - target).pow(2).sum() / (c * h * w)
+    return (output - target).pow(2).mean()
 
 
 def rgb_to_luminance(x: torch.Tensor) -> torch.Tensor:
@@ -85,8 +83,7 @@ def output_temporal_loss(
     output_diff = output_frame - warp_optical_flow(prev_output_frame, reverse_flow)
     luminance = rgb_to_luminance(input_diff).unsqueeze(1)
 
-    n, c, h, w = input_frame.shape
-    return (occlusion_mask * (output_diff - luminance)).pow(2).sum() / (h * w)
+    return (occlusion_mask * (output_diff - luminance)).pow(2).mean()
 
 
 def feature_temporal_loss(
@@ -109,4 +106,4 @@ def feature_temporal_loss(
     )
 
     diff = features - warp_optical_flow(prev_features, flow_resized)
-    return (mask_resized * diff).pow(2).sum() / (c * h * w)
+    return (mask_resized * diff).pow(2).mean()

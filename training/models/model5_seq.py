@@ -77,33 +77,46 @@ class Model5Seq(SequenceStyleModel):
 
         self.encoder = nn.Sequential(
             nn.ReflectionPad2d(2),
-            nn.Conv2d(3, 16, kernel_size=5, stride=2),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(3, 32, kernel_size=5, stride=2),
+            # nn.InstanceNorm2d(16, affine=True),
             nn.ReLU6(inplace=True),
             nn.ReflectionPad2d(1),
-            nn.Conv2d(16, 16, kernel_size=3, stride=2, groups=16, bias=False),
-            nn.Conv2d(16, 32, kernel_size=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(32, 32, kernel_size=3, stride=2, groups=16, bias=False),
+            nn.Conv2d(32, 64, kernel_size=1),
+            # nn.InstanceNorm2d(32, affine=True),
             nn.ReLU6(inplace=True),
         )
 
         self.attn = LinearSpatialAttention(in_channels=16, dim=4)
         # Dilated residual stack: dilation 1, 2, 4 for large receptive field
         self.residual = nn.Sequential(
-            InvertedBottleneck(32, 192, dilation=1),
-            InvertedBottleneck(32, 192, dilation=2),
-            InvertedBottleneck(32, 192, dilation=4),
+            InvertedBottleneck(64, 192, dilation=2),
+            InvertedBottleneck(64, 192, dilation=1),
         )
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
-            nn.BatchNorm2d(16),
+
+            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
             nn.ReLU6(inplace=True),
-            nn.ConvTranspose2d(16, 8, kernel_size=2, stride=2),
-            nn.BatchNorm2d(8),
-            nn.ReLU6(inplace=True),
+
             nn.ReflectionPad2d(2),
-            nn.Conv2d(8, 3, kernel_size=5),
+            nn.Conv2d(32, 32, kernel_size=5),
+            nn.ReLU6(inplace=True),
+
+            # nn.InstanceNorm2d(16, affine=True),
+            # nn.BatchNorm2d(16),
+            nn.ReLU6(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+            # nn.InstanceNorm2d(8, affine=True),
+            # nn.BatchNorm2d(8),
+            nn.ReLU6(inplace=True),
+
+            nn.ReflectionPad2d(2),
+            nn.Conv2d(16, 16, kernel_size=5),
+            nn.PReLU(16),
+
+            # nn.ReflectionPad2d(2),
+            nn.Conv2d(16, 3, kernel_size=1),
         )
 
     def train_resolution(self) -> tuple[int, int]:

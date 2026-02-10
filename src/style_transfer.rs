@@ -8,12 +8,9 @@ use ort::session::Session;
 use ort::value::Tensor;
 
 // ===== Inference resolution =====
-// Model5Seq has dynamic axes; we use 512 (training resolution) as height.
-pub const INFERENCE_SIZE: u32 = 512;
-
-/// Render target dimensions — 16:9 aspect ratio at INFERENCE_SIZE height
-pub const RENDER_WIDTH: u32 = INFERENCE_SIZE * 16 / 9;
-pub const RENDER_HEIGHT: u32 = INFERENCE_SIZE;
+// 512×288 — 16:9, matches training resolution
+pub const RENDER_WIDTH: u32 = 512;
+pub const RENDER_HEIGHT: u32 = 288;
 
 // ===== Common types =====
 
@@ -227,7 +224,7 @@ fn inference_thread_main(
         }
         let session = sessions[current_model].as_mut().unwrap();
 
-        // Resize to render dimensions (16:9 at INFERENCE_SIZE height)
+        // Resize to render dimensions (512×288, 16:9)
         let w = RENDER_WIDTH as usize;
         let h = RENDER_HEIGHT as usize;
         let resized = resize_rgba(

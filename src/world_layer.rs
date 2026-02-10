@@ -23,6 +23,7 @@ impl Plugin for WorldLayerPlugin {
 
         app.add_observer(on_world_layer_added);
         app.add_systems(Update, handle_world_switch);
+        app.add_systems(Last, propagate_world_layer);
     }
 }
 
@@ -150,6 +151,38 @@ fn on_world_layer_added(
         Propagate(render_layers),
         collision_layers,
     ));
+}
+
+/// Propagate `WorldLayer` down the hierarchy: if a child lacks its own
+/// `WorldLayer`, it inherits the parent's.  Children that already carry
+/// a `WorldLayer` keep their own value (propagation stops there).
+fn propagate_world_layer(
+    roots: Query<(&WorldLayer, &Children), Added<WorldLayer>>,
+    children_q: Query<Option<&Children>>,
+    has_wl: Query<(), With<WorldLayer>>,
+    mut commands: Commands,
+) {
+    for (wl, children) in &roots {
+        propagate_wl_recursive(wl, children, &children_q, &has_wl, &mut commands);
+    }
+}
+
+fn propagate_wl_recursive(
+    wl: &WorldLayer,
+    children: &Children,
+    children_q: &Query<Option<&Children>>,
+    has_wl: &Query<(), With<WorldLayer>>,
+    commands: &mut Commands,
+) {
+    for child in children.iter() {
+        if has_wl.get(child).is_ok() {
+            continue;
+        }
+        commands.entity(child).insert(wl.clone());
+        if let Ok(Some(grandchildren)) = children_q.get(child) {
+            propagate_wl_recursive(wl, grandchildren, children_q, has_wl, commands);
+        }
+    }
 }
 
 /// O(1) world switch: only mutate the camera RenderLayers + player CollisionLayers.

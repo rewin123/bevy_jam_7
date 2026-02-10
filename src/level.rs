@@ -91,7 +91,7 @@ fn spawn_lighting(mut commands: Commands) {
 
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.6, 0.5, 0.7),
-        brightness: 200.0,
+        brightness: 800.0,
         affects_lightmapped_meshes: true,
     });
 }

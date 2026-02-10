@@ -37,6 +37,7 @@ fn main() {
         fever::FeverPlugin,
         triggers::TriggersPlugin,
         world_layer::WorldLayerPlugin,
+        skybox::SkyboxPlugin,
     ));
 
     if is_test_inference {
