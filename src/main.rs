@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use avian3d::prelude::*;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
@@ -7,6 +9,8 @@ use fever_dream::*;
 
 fn main() {
     let mut app = App::new();
+
+    let is_test_inference = std::env::args().any(|a| a == "--test-inference");
 
     app.add_plugins(
         DefaultPlugins
@@ -32,14 +36,31 @@ fn main() {
         post_process::PostProcessPlugin,
         fever::FeverPlugin,
         triggers::TriggersPlugin,
-        world_layer::WorldLayerPlugin
+        world_layer::WorldLayerPlugin,
     ));
+
+    if is_test_inference {
+        app.insert_resource(style_transfer::TestInferenceMode);
+        app.add_systems(Update, check_test_inference_done);
+    }
 
     if std::env::args().any(|a| a == "--screenshot-and-exit") {
         app.add_systems(Update, auto_screenshot);
     }
 
     app.run();
+}
+
+fn check_test_inference_done(
+    test_done: Option<Res<style_transfer::TestInferenceDone>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if let Some(done) = test_done {
+        if done.0.load(Ordering::Acquire) {
+            info!("Test inference frames saved, exiting");
+            exit.write(AppExit::Success);
+        }
+    }
 }
 
 

@@ -52,8 +52,9 @@ from utils.transforms import FlowAwareResize, FlowAwareRandomHorizontalFlip, Flo
 # Model: "model5" (single-frame, ~20K params) or "reconet" (sequence-frame, ~1.68M)
 MODEL_TYPE = "model5_seq"
 
-# Style image path (single style per training run)
-STYLE_IMAGE = os.path.join(_PROJECT_DIR, "assets/styles/manga.png")
+# Style images: single path, list of paths, or directory
+# Multiple images → Gram matrices are averaged for a more robust style target
+STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/manga_set")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
@@ -120,6 +121,23 @@ def build_model(model_type: str):
         raise ValueError(f"Unknown model type: {model_type}")
 
 
+def resolve_style_paths(style_input) -> list[str]:
+    """Resolve STYLE_IMAGES config to a list of image paths.
+
+    Accepts: single path (str), list of paths, or directory path.
+    """
+    if isinstance(style_input, list):
+        return style_input
+    if os.path.isdir(style_input):
+        exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        return sorted(
+            os.path.join(style_input, f)
+            for f in os.listdir(style_input)
+            if os.path.splitext(f)[1].lower() in exts
+        )
+    return [style_input]
+
+
 def load_style_image(path: str, resolution: tuple[int, int]) -> torch.Tensor:
     """Load style image as [1,3,H,W] tensor in [0,1]."""
     h, w = resolution
@@ -148,12 +166,23 @@ def train():
     # VGG16 feature extractor (frozen)
     vgg = VGG16Features(VGG16_WEIGHTS).to(device)
 
-    # Precompute style Gram matrices
-    style_img = load_style_image(STYLE_IMAGE, seq_desc.resolution).to(device)
+    # Precompute style Gram matrices (averaged over all style images)
+    style_paths = resolve_style_paths(STYLE_IMAGES)
+    assert style_paths, f"No style images found in {STYLE_IMAGES}"
+    style_grams = None
     with torch.no_grad():
-        style_vgg_features = vgg(preprocess_for_vgg(style_img))
-        style_grams = [gram_matrix(f) for f in style_vgg_features]
-    print(f"Style image: {STYLE_IMAGE}")
+        for sp in style_paths:
+            img = load_style_image(sp, seq_desc.resolution).to(device)
+            feats = vgg(preprocess_for_vgg(img))
+            grams = [gram_matrix(f) for f in feats]
+            if style_grams is None:
+                style_grams = grams
+            else:
+                style_grams = [a + b for a, b in zip(style_grams, grams)]
+        style_grams = [g / len(style_paths) for g in style_grams]
+    # Keep first style image for visualization
+    style_img = load_style_image(style_paths[0], seq_desc.resolution).to(device)
+    print(f"Style images ({len(style_paths)}): {[os.path.basename(p) for p in style_paths]}")
 
     # Build dataset + dataloader
     if isinstance(model, SingleFrameStyleModel):
@@ -198,7 +227,10 @@ def train():
     # TensorBoard + output dirs
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     from datetime import datetime
-    style_name = os.path.splitext(os.path.basename(STYLE_IMAGE))[0]
+    if len(style_paths) == 1:
+        style_name = os.path.splitext(os.path.basename(style_paths[0]))[0]
+    else:
+        style_name = f"{len(style_paths)}styles"
     run_name = f"{MODEL_TYPE}_{style_name}_{datetime.now():%Y%m%d_%H%M%S}"
     run_dir = os.path.join(TENSORBOARD_DIR, run_name)
     writer = SummaryWriter(run_dir)

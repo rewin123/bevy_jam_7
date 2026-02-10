@@ -1,50 +1,21 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use ndarray::Array4;
 use ort::session::Session;
 use ort::value::Tensor;
 
-// ===== Compile-time mutual exclusivity =====
-#[cfg(all(feature = "style-johnson", feature = "style-adain"))]
-compile_error!("Features `style-johnson` and `style-adain` are mutually exclusive");
-#[cfg(all(feature = "style-johnson", feature = "style-microast"))]
-compile_error!("Features `style-johnson` and `style-microast` are mutually exclusive");
-#[cfg(all(feature = "style-adain", feature = "style-microast"))]
-compile_error!("Features `style-adain` and `style-microast` are mutually exclusive");
-#[cfg(not(any(feature = "style-johnson", feature = "style-adain", feature = "style-microast")))]
-compile_error!("Exactly one style backend must be enabled: style-johnson, style-adain, or style-microast");
-
-// ===== Per-backend inference resolution =====
-// Divisibility constraints:
-//   Johnson: fixed 224x224 (ONNX graph has static shape, no dynamic axes)
-//   AdaIN:   /16 (VGG-19 has 4 MaxPool2d stride-2 layers); trained on 256x256 crops
-//   MicroAST: /4 (2 stride-2 depthwise convolutions); trained on 256x256 crops
-
-#[cfg(feature = "style-johnson")]
-pub const INFERENCE_SIZE: u32 = 224;
-
-#[cfg(feature = "style-adain")]
-pub const INFERENCE_SIZE: u32 = 256;
-
-#[cfg(feature = "style-microast")]
+// ===== Inference resolution =====
+// Model5Seq has dynamic axes; we use 512 (training resolution) as height.
 pub const INFERENCE_SIZE: u32 = 512;
 
 /// Render target dimensions — 16:9 aspect ratio at INFERENCE_SIZE height
 pub const RENDER_WIDTH: u32 = INFERENCE_SIZE * 16 / 9;
 pub const RENDER_HEIGHT: u32 = INFERENCE_SIZE;
 
-/// Resize RGBA pixel buffer using Lanczos3 filter
-fn resize_rgba(pixels: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
-    if src_w == dst_w && src_h == dst_h {
-        return pixels.to_vec();
-    }
-    let img = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec())
-        .expect("resize_rgba: invalid buffer size");
-    let resized = image::imageops::resize(&img, dst_w, dst_h, image::imageops::FilterType::Lanczos3);
-    resized.into_raw()
-}
-
-// ===== Common types (all backends) =====
+// ===== Common types =====
 
 pub struct FrameData {
     pub pixels: Vec<u8>, // RGBA, row-major
@@ -75,6 +46,15 @@ pub struct CurrentStyle {
     pub names: Vec<String>,
 }
 
+/// Insert this resource to enable test-inference mode:
+/// saves raw input + styled output from the first inference pass, then signals done.
+#[derive(Resource)]
+pub struct TestInferenceMode;
+
+/// Inserted when test mode is active. Becomes true when test frames are saved.
+#[derive(Resource)]
+pub struct TestInferenceDone(pub Arc<AtomicBool>);
+
 pub struct StyleTransferPlugin;
 
 impl Plugin for StyleTransferPlugin {
@@ -83,55 +63,22 @@ impl Plugin for StyleTransferPlugin {
     }
 }
 
-// ===== Shared helpers for AdaIN and MicroAST =====
+// ===== Helpers =====
 
-#[cfg(any(feature = "style-adain", feature = "style-microast"))]
-fn scan_style_directory() -> Vec<(String, String)> {
-    let style_dir = "assets/styles";
-    let mut styles = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(style_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                let ext_lower = ext.to_string_lossy().to_lowercase();
-                if ext_lower == "jpg" || ext_lower == "jpeg" || ext_lower == "png" {
-                    let name = path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    styles.push((name, path.to_string_lossy().to_string()));
-                }
-            }
-        }
+/// Resize RGBA pixel buffer using Lanczos3 filter
+fn resize_rgba(pixels: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
+    if src_w == dst_w && src_h == dst_h {
+        return pixels.to_vec();
     }
-
-    styles.sort_by(|a, b| a.0.cmp(&b.0));
-    styles
+    let img = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec())
+        .expect("resize_rgba: invalid buffer size");
+    let resized =
+        image::imageops::resize(&img, dst_w, dst_h, image::imageops::FilterType::Lanczos3);
+    resized.into_raw()
 }
 
-#[cfg(any(feature = "style-adain", feature = "style-microast"))]
-fn load_style_image(path: &str, target_w: u32, target_h: u32) -> Array4<f32> {
-    let img = image::open(path)
-        .unwrap_or_else(|e| panic!("Failed to load style image {}: {}", path, e))
-        .resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
-        .into_rgb8();
-
-    let mut tensor = Array4::<f32>::zeros((1, 3, target_h as usize, target_w as usize));
-    for y in 0..target_h as usize {
-        for x in 0..target_w as usize {
-            let pixel = img.get_pixel(x as u32, y as u32);
-            tensor[[0, 0, y, x]] = pixel[0] as f32 / 255.0;
-            tensor[[0, 1, y, x]] = pixel[1] as f32 / 255.0;
-            tensor[[0, 2, y, x]] = pixel[2] as f32 / 255.0;
-        }
-    }
-    tensor
-}
-
-#[cfg(any(feature = "style-adain", feature = "style-microast"))]
-fn rgba_to_tensor_01(pixels: &[u8], w: usize, h: usize) -> Array4<f32> {
+/// RGBA [u8] -> [1, 3, H, W] float32 [0, 1]
+fn rgba_to_tensor(pixels: &[u8], w: usize, h: usize) -> Array4<f32> {
     let mut input = Array4::<f32>::zeros((1, 3, h, w));
     for y in 0..h {
         for x in 0..w {
@@ -144,8 +91,8 @@ fn rgba_to_tensor_01(pixels: &[u8], w: usize, h: usize) -> Array4<f32> {
     input
 }
 
-#[cfg(any(feature = "style-adain", feature = "style-microast"))]
-fn tensor_01_to_rgba(tensor: &ndarray::ArrayViewD<'_, f32>, w: usize, h: usize) -> Vec<u8> {
+/// [1, 3, H, W] float32 [0, 1] -> RGBA [u8]
+fn tensor_to_rgba(tensor: &ndarray::ArrayViewD<'_, f32>, w: usize, h: usize) -> Vec<u8> {
     let mut rgba = vec![255u8; w * h * 4];
     for y in 0..h {
         for x in 0..w {
@@ -158,7 +105,6 @@ fn tensor_01_to_rgba(tensor: &ndarray::ArrayViewD<'_, f32>, w: usize, h: usize) 
     rgba
 }
 
-#[cfg(any(feature = "style-adain", feature = "style-microast"))]
 fn build_session(path: &str) -> Session {
     Session::builder()
         .unwrap()
@@ -166,34 +112,65 @@ fn build_session(path: &str) -> Session {
             ort::execution_providers::CPUExecutionProvider::default().build(),
         ])
         .unwrap()
-        .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Disable)
+        .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
         .unwrap()
         .commit_from_file(path)
         .unwrap_or_else(|e| panic!("Failed to load model {}: {}", path, e))
 }
 
-// =============================================================================
-// JOHNSON BACKEND
-// =============================================================================
+/// Scan `assets/models/styles/` for .onnx files, return sorted (name, path) pairs.
+fn scan_model_directory() -> Vec<(String, String)> {
+    let model_dir = "assets/models/styles";
+    let mut models = Vec::new();
 
-#[cfg(feature = "style-johnson")]
-fn setup_inference_thread(mut commands: Commands) {
+    if let Ok(entries) = std::fs::read_dir(model_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("onnx")) {
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                models.push((name, path.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    models
+}
+
+// ===== Setup =====
+
+fn setup_inference_thread(mut commands: Commands, test_mode: Option<Res<TestInferenceMode>>) {
     let (send_frame, recv_frame) = bounded::<FrameData>(1);
     let (send_styled, recv_styled) = bounded::<StyledFrame>(1);
     let (send_switch, recv_switch) = bounded::<StyleSwitch>(4);
 
-    let model_names = vec![
-        "candy-9".to_string(),
-        "mosaic-9".to_string(),
-        "rain-princess-9".to_string(),
-        "udnie-9".to_string(),
-        "pointilism-9".to_string(),
-    ];
+    let is_test = test_mode.is_some();
+    let test_done = Arc::new(AtomicBool::new(false));
+    if is_test {
+        commands.insert_resource(TestInferenceDone(test_done.clone()));
+    }
 
-    let names_clone = model_names.clone();
+    let models = scan_model_directory();
+    if models.is_empty() {
+        if is_test {
+            error!("No .onnx style models found in assets/models/styles/ — cannot run test");
+            test_done.store(true, Ordering::Release);
+        } else {
+            warn!("No .onnx style models found in assets/models/styles/");
+        }
+    }
+
+    let names: Vec<String> = models.iter().map(|(name, _)| name.clone()).collect();
+    let paths: Vec<String> = models.iter().map(|(_, path)| path.clone()).collect();
+
+    info!("Style models: {:?}", names);
 
     std::thread::spawn(move || {
-        inference_thread_main(recv_frame, send_styled, recv_switch, &names_clone);
+        inference_thread_main(recv_frame, send_styled, recv_switch, &paths, is_test, test_done);
     });
 
     commands.insert_resource(StyleChannels {
@@ -201,79 +178,91 @@ fn setup_inference_thread(mut commands: Commands) {
         recv_styled,
         send_switch,
     });
-    commands.insert_resource(CurrentStyle {
-        index: 0,
-        names: model_names,
-    });
+    commands.insert_resource(CurrentStyle { index: 0, names });
 }
 
-#[cfg(feature = "style-johnson")]
+// ===== Inference thread =====
+
 fn inference_thread_main(
     recv: Receiver<FrameData>,
     send: Sender<StyledFrame>,
     recv_switch: Receiver<StyleSwitch>,
-    model_names: &[String],
+    model_paths: &[String],
+    test_mode: bool,
+    test_done: Arc<AtomicBool>,
 ) {
-    info!("Inference thread [Johnson]: loading ONNX models...");
-
-    let mut sessions: Vec<Session> = model_names
-        .iter()
-        .map(|name| {
-            let path = format!("assets/models/{}.onnx", name);
-            Session::builder()
-                .unwrap()
-                .with_execution_providers([
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
-                ])
-                .unwrap()
-                .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
-                .unwrap()
-                .commit_from_file(&path)
-                .unwrap_or_else(|e| panic!("Failed to load model {}: {}", path, e))
-        })
-        .collect();
+    let num_models = model_paths.len();
+    let mut sessions: Vec<Option<Session>> = (0..num_models).map(|_| None).collect();
+    let mut current_model = 0usize;
+    let mut test_saved = false;
+    let start_time = std::time::Instant::now();
 
     info!(
-        "Inference thread [Johnson]: all {} models loaded",
-        sessions.len()
+        "Inference thread: {} models available, loading lazily",
+        num_models
     );
-
-    let mut current_model = 0usize;
 
     while let Ok(frame) = recv.recv() {
         while let Ok(switch) = recv_switch.try_recv() {
-            current_model = switch.index % sessions.len();
-            info!(
-                "Inference thread [Johnson]: switched to model {}",
-                current_model
-            );
-        }
-
-        let inf = INFERENCE_SIZE as usize;
-
-        // Resize incoming rectangular frame to square for inference
-        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, INFERENCE_SIZE, INFERENCE_SIZE);
-
-        // RGBA -> [1, 3, H, W] float32 (0-255 range)
-        let mut input = Array4::<f32>::zeros((1, 3, inf, inf));
-        for y in 0..inf {
-            for x in 0..inf {
-                let idx = (y * inf + x) * 4;
-                input[[0, 0, y, x]] = square_pixels[idx] as f32;
-                input[[0, 1, y, x]] = square_pixels[idx + 1] as f32;
-                input[[0, 2, y, x]] = square_pixels[idx + 2] as f32;
+            if num_models > 0 {
+                current_model = switch.index % num_models;
+                info!("Inference thread: switched to model {}", current_model);
             }
         }
 
-        let tensor = match Tensor::from_array(input) {
+        if num_models == 0 {
+            let _ = send.try_send(StyledFrame {
+                pixels: frame.pixels,
+                width: frame.width,
+                height: frame.height,
+            });
+            continue;
+        }
+
+        // Lazy-load on first use
+        if sessions[current_model].is_none() {
+            info!("Loading model '{}'...", model_paths[current_model]);
+            sessions[current_model] = Some(build_session(&model_paths[current_model]));
+            info!("Model loaded");
+        }
+        let session = sessions[current_model].as_mut().unwrap();
+
+        // Resize to render dimensions (16:9 at INFERENCE_SIZE height)
+        let w = RENDER_WIDTH as usize;
+        let h = RENDER_HEIGHT as usize;
+        let resized = resize_rgba(
+            &frame.pixels,
+            frame.width,
+            frame.height,
+            RENDER_WIDTH,
+            RENDER_HEIGHT,
+        );
+
+        // Test mode: wait 1s for the scene to stabilize, then save frames
+        let test_ready = test_mode && !test_saved
+            && start_time.elapsed() >= std::time::Duration::from_secs(1);
+        if test_ready {
+            if let Some(img) =
+                image::RgbaImage::from_raw(RENDER_WIDTH, RENDER_HEIGHT, resized.clone())
+            {
+                img.save("test_input.png")
+                    .unwrap_or_else(|e| error!("Failed to save test_input.png: {}", e));
+                info!("Test: saved test_input.png ({}x{})", RENDER_WIDTH, RENDER_HEIGHT);
+            }
+        }
+
+        // RGBA -> [1, 3, H, W] float32 [0, 1]
+        let input_nd = rgba_to_tensor(&resized, w, h);
+        let input_tensor = match Tensor::from_array(input_nd) {
             Ok(t) => t,
             Err(e) => {
-                error!("Failed to create tensor: {}", e);
+                error!("Failed to create input tensor: {}", e);
                 continue;
             }
         };
 
-        let outputs = match sessions[current_model].run(ort::inputs!["input1" => tensor]) {
+        // Run inference
+        let outputs = match session.run(ort::inputs!["input" => input_tensor]) {
             Ok(o) => o,
             Err(e) => {
                 error!("Inference failed: {}", e);
@@ -281,7 +270,7 @@ fn inference_thread_main(
             }
         };
 
-        let out_view = match outputs["output1"].try_extract_array::<f32>() {
+        let output = match outputs["output"].try_extract_array::<f32>() {
             Ok(v) => v,
             Err(e) => {
                 error!("Failed to extract output: {}", e);
@@ -289,341 +278,40 @@ fn inference_thread_main(
             }
         };
 
-        // [1, 3, H, W] -> RGBA Vec<u8> (square)
-        let mut square_rgba = vec![255u8; inf * inf * 4];
-        for y in 0..inf {
-            for x in 0..inf {
-                let idx = (y * inf + x) * 4;
-                square_rgba[idx] = out_view[[0, 0, y, x]].clamp(0.0, 255.0) as u8;
-                square_rgba[idx + 1] = out_view[[0, 1, y, x]].clamp(0.0, 255.0) as u8;
-                square_rgba[idx + 2] = out_view[[0, 2, y, x]].clamp(0.0, 255.0) as u8;
+        let out_h = output.shape()[2];
+        let out_w = output.shape()[3];
+        let output_rgba = tensor_to_rgba(&output, out_w, out_h);
+
+        // Resize to display dimensions if model output differs
+        let final_pixels = resize_rgba(
+            &output_rgba,
+            out_w as u32,
+            out_h as u32,
+            RENDER_WIDTH,
+            RENDER_HEIGHT,
+        );
+
+        // Test mode: save the output frame
+        if test_ready {
+            if let Some(img) = image::RgbaImage::from_raw(
+                RENDER_WIDTH,
+                RENDER_HEIGHT,
+                final_pixels.clone(),
+            ) {
+                img.save("test_bevy_output.png")
+                    .unwrap_or_else(|e| error!("Failed to save test_bevy_output.png: {}", e));
+                info!("Test: saved test_bevy_output.png");
             }
+            test_saved = true;
+            test_done.store(true, Ordering::Release);
         }
 
-        // Resize back to original rectangular dimensions
-        let output_pixels = resize_rgba(&square_rgba, INFERENCE_SIZE, INFERENCE_SIZE, RENDER_WIDTH, RENDER_HEIGHT);
-
         let _ = send.try_send(StyledFrame {
-            pixels: output_pixels,
+            pixels: final_pixels,
             width: RENDER_WIDTH,
             height: RENDER_HEIGHT,
         });
     }
 
-    info!("Inference thread [Johnson]: shutting down");
-}
-
-// =============================================================================
-// ADAIN BACKEND
-// =============================================================================
-
-#[cfg(feature = "style-adain")]
-fn adain(content: &Array4<f32>, style: &Array4<f32>) -> Array4<f32> {
-    use ndarray::s;
-
-    let (_, c, _, _) = content.dim();
-    let mut result = Array4::<f32>::zeros(content.dim());
-
-    for ch in 0..c {
-        let content_slice = content.slice(s![0, ch, .., ..]);
-        let style_slice = style.slice(s![0, ch, .., ..]);
-
-        let c_mean = content_slice.mean().unwrap_or(0.0);
-        let s_mean = style_slice.mean().unwrap_or(0.0);
-
-        let c_var = content_slice.mapv(|x| (x - c_mean).powi(2)).mean().unwrap_or(0.0);
-        let s_var = style_slice.mapv(|x| (x - s_mean).powi(2)).mean().unwrap_or(0.0);
-
-        let c_std = (c_var + 1e-5_f32).sqrt();
-        let s_std = (s_var + 1e-5_f32).sqrt();
-
-        result
-            .slice_mut(s![0, ch, .., ..])
-            .assign(&content_slice.mapv(|x| (x - c_mean) / c_std * s_std + s_mean));
-    }
-    result
-}
-
-#[cfg(feature = "style-adain")]
-fn setup_inference_thread(mut commands: Commands) {
-    let (send_frame, recv_frame) = bounded::<FrameData>(1);
-    let (send_styled, recv_styled) = bounded::<StyledFrame>(1);
-    let (send_switch, recv_switch) = bounded::<StyleSwitch>(4);
-
-    let styles = scan_style_directory();
-    if styles.is_empty() {
-        error!("AdaIN: no style images found in assets/styles/! Add .jpg or .png files.");
-    }
-
-    let names: Vec<String> = styles.iter().map(|(name, _)| name.clone()).collect();
-    let paths: Vec<String> = styles.iter().map(|(_, path)| path.clone()).collect();
-
-    std::thread::spawn(move || {
-        inference_thread_main_adain(recv_frame, send_styled, recv_switch, &paths);
-    });
-
-    commands.insert_resource(StyleChannels {
-        send_frame,
-        recv_styled,
-        send_switch,
-    });
-    commands.insert_resource(CurrentStyle {
-        index: 0,
-        names,
-    });
-}
-
-#[cfg(feature = "style-adain")]
-fn inference_thread_main_adain(
-    recv: Receiver<FrameData>,
-    send: Sender<StyledFrame>,
-    recv_switch: Receiver<StyleSwitch>,
-    style_paths: &[String],
-) {
-    info!("Inference thread [AdaIN]: loading encoder and decoder...");
-    let mut encoder = build_session("assets/models/adain-vgg.onnx");
-    let mut decoder = build_session("assets/models/adain-decoder.onnx");
-
-    // Lazy cache: encode style images through VGG on demand
-    let inf_size = INFERENCE_SIZE;
-    let num_styles = style_paths.len();
-    let mut style_features: Vec<Option<Array4<f32>>> = vec![None; num_styles];
-
-    info!("AdaIN: {} style images found, encoding on demand at {}x{}", num_styles, inf_size, inf_size);
-
-    let mut current_style = 0usize;
-
-    while let Ok(frame) = recv.recv() {
-        while let Ok(switch) = recv_switch.try_recv() {
-            if num_styles > 0 {
-                current_style = switch.index % num_styles;
-                info!("Inference thread [AdaIN]: switched to style {}", current_style);
-            }
-        }
-
-        if num_styles == 0 {
-            let _ = send.try_send(StyledFrame {
-                pixels: frame.pixels,
-                width: frame.width,
-                height: frame.height,
-            });
-            continue;
-        }
-
-        // Lazy-encode current style if not cached
-        if style_features[current_style].is_none() {
-            info!("AdaIN: encoding style {} '{}'...", current_style, style_paths[current_style]);
-            let style_tensor = load_style_image(&style_paths[current_style], inf_size, inf_size);
-            let tensor = Tensor::from_array(style_tensor).unwrap();
-            let outputs = encoder.run(ort::inputs!["input" => tensor]).unwrap();
-            let feat = outputs["output"].try_extract_array::<f32>().unwrap();
-            style_features[current_style] = Some(
-                feat.to_owned().into_dimensionality::<ndarray::Ix4>().unwrap()
-            );
-            info!("AdaIN: style {} encoded", current_style);
-        }
-
-        // Resize incoming rectangular frame to square for inference
-        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, inf_size, inf_size);
-        let w = inf_size as usize;
-        let h = inf_size as usize;
-
-        let content_nd = rgba_to_tensor_01(&square_pixels, w, h);
-        let content_tensor = match Tensor::from_array(content_nd) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("AdaIN: failed to create content tensor: {}", e);
-                continue;
-            }
-        };
-
-        // Encode content
-        let enc_out = match encoder.run(ort::inputs!["input" => content_tensor]) {
-            Ok(o) => o,
-            Err(e) => {
-                error!("AdaIN encoder failed: {}", e);
-                continue;
-            }
-        };
-        let content_features = match enc_out["output"].try_extract_array::<f32>() {
-            Ok(v) => v.to_owned().into_dimensionality::<ndarray::Ix4>().unwrap(),
-            Err(e) => {
-                error!("AdaIN: failed to extract encoder output: {}", e);
-                continue;
-            }
-        };
-
-        // AdaIN: transfer statistics
-        let transferred = adain(&content_features, style_features[current_style].as_ref().unwrap());
-
-        // Decode
-        let dec_tensor = match Tensor::from_array(transferred) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("AdaIN: failed to create decoder tensor: {}", e);
-                continue;
-            }
-        };
-        let dec_out = match decoder.run(ort::inputs!["input" => dec_tensor]) {
-            Ok(o) => o,
-            Err(e) => {
-                error!("AdaIN decoder failed: {}", e);
-                continue;
-            }
-        };
-        let output = match dec_out["output"].try_extract_array::<f32>() {
-            Ok(v) => v,
-            Err(e) => {
-                error!("AdaIN: failed to extract decoder output: {}", e);
-                continue;
-            }
-        };
-
-        // The decoder may output a different spatial size due to VGG pooling/upsampling
-        let out_shape = output.shape();
-        let out_h = out_shape[2];
-        let out_w = out_shape[3];
-        let square_rgba = tensor_01_to_rgba(&output, out_w, out_h);
-
-        // Resize back to rectangular display dimensions
-        let output_pixels = resize_rgba(&square_rgba, out_w as u32, out_h as u32, RENDER_WIDTH, RENDER_HEIGHT);
-
-        let _ = send.try_send(StyledFrame {
-            pixels: output_pixels,
-            width: RENDER_WIDTH,
-            height: RENDER_HEIGHT,
-        });
-    }
-
-    info!("Inference thread [AdaIN]: shutting down");
-}
-
-// =============================================================================
-// MICROAST BACKEND
-// =============================================================================
-
-#[cfg(feature = "style-microast")]
-fn setup_inference_thread(mut commands: Commands) {
-    let (send_frame, recv_frame) = bounded::<FrameData>(1);
-    let (send_styled, recv_styled) = bounded::<StyledFrame>(1);
-    let (send_switch, recv_switch) = bounded::<StyleSwitch>(4);
-
-    let styles = scan_style_directory();
-    if styles.is_empty() {
-        error!("MicroAST: no style images found in assets/styles/! Add .jpg or .png files.");
-    }
-
-    let names: Vec<String> = styles.iter().map(|(name, _)| name.clone()).collect();
-    let paths: Vec<String> = styles.iter().map(|(_, path)| path.clone()).collect();
-
-    std::thread::spawn(move || {
-        inference_thread_main_microast(recv_frame, send_styled, recv_switch, &paths);
-    });
-
-    commands.insert_resource(StyleChannels {
-        send_frame,
-        recv_styled,
-        send_switch,
-    });
-    commands.insert_resource(CurrentStyle {
-        index: 0,
-        names,
-    });
-}
-
-#[cfg(feature = "style-microast")]
-fn inference_thread_main_microast(
-    recv: Receiver<FrameData>,
-    send: Sender<StyledFrame>,
-    recv_switch: Receiver<StyleSwitch>,
-    style_paths: &[String],
-) {
-    info!("Inference thread [MicroAST]: loading model...");
-    let mut session = build_session("assets/models/microast.onnx");
-
-    // Lazy-load style images on demand
-    let num_styles = style_paths.len();
-    let mut style_tensors: Vec<Option<Array4<f32>>> = vec![None; num_styles];
-    info!("MicroAST: {} style images found, loading on demand", num_styles);
-
-    let mut current_style = 0usize;
-
-    while let Ok(frame) = recv.recv() {
-        while let Ok(switch) = recv_switch.try_recv() {
-            if num_styles > 0 {
-                current_style = switch.index % num_styles;
-                info!(
-                    "Inference thread [MicroAST]: switched to style {}",
-                    current_style
-                );
-            }
-        }
-
-        if num_styles == 0 {
-            let _ = send.try_send(StyledFrame {
-                pixels: frame.pixels,
-                width: frame.width,
-                height: frame.height,
-            });
-            continue;
-        }
-
-        // Lazy-load current style image if not cached
-        if style_tensors[current_style].is_none() {
-            info!("MicroAST: loading style {} '{}'...", current_style, style_paths[current_style]);
-            style_tensors[current_style] = Some(load_style_image(&style_paths[current_style], INFERENCE_SIZE, INFERENCE_SIZE));
-            info!("MicroAST: style {} loaded", current_style);
-        }
-
-        // Resize incoming rectangular frame to square for inference
-        let inf = INFERENCE_SIZE as usize;
-        let square_pixels = resize_rgba(&frame.pixels, frame.width, frame.height, INFERENCE_SIZE, INFERENCE_SIZE);
-
-        let content = rgba_to_tensor_01(&square_pixels, inf, inf);
-        let content_tensor = match Tensor::from_array(content) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("MicroAST: failed to create content tensor: {}", e);
-                continue;
-            }
-        };
-        let style_tensor = match Tensor::from_array(style_tensors[current_style].as_ref().unwrap().clone()) {
-            Ok(t) => t,
-            Err(e) => {
-                error!("MicroAST: failed to create style tensor: {}", e);
-                continue;
-            }
-        };
-
-        let outputs = match session
-            .run(ort::inputs!["content" => content_tensor, "style" => style_tensor])
-        {
-            Ok(o) => o,
-            Err(e) => {
-                error!("MicroAST inference failed: {}", e);
-                continue;
-            }
-        };
-
-        let output = match outputs["output"].try_extract_array::<f32>() {
-            Ok(v) => v,
-            Err(e) => {
-                error!("MicroAST: failed to extract output: {}", e);
-                continue;
-            }
-        };
-
-        let square_rgba = tensor_01_to_rgba(&output, inf, inf);
-
-        // Resize back to rectangular display dimensions
-        let output_pixels = resize_rgba(&square_rgba, INFERENCE_SIZE, INFERENCE_SIZE, RENDER_WIDTH, RENDER_HEIGHT);
-
-        let _ = send.try_send(StyledFrame {
-            pixels: output_pixels,
-            width: RENDER_WIDTH,
-            height: RENDER_HEIGHT,
-        });
-    }
-
-    info!("Inference thread [MicroAST]: shutting down");
+    info!("Inference thread: shutting down");
 }

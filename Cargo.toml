@@ -3,12 +3,6 @@ name = "fever_dream"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = ["style-johnson"]
-style-johnson = []
-style-adain = []
-style-microast = []
-
 [dependencies]
 bevy = { version = "0.18", features = ["3d"] }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "ndarray"] }
