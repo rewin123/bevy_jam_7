@@ -66,9 +66,9 @@ def warp_optical_flow(source: torch.Tensor, reverse_flow: torch.Tensor) -> torch
 
     grid = reverse_flow.clone()
     grid[..., 0] += torch.arange(w, device=device).view(1, 1, w)
-    grid[..., 0] = grid[..., 0] * 2 / w - 1
+    grid[..., 0] = (grid[..., 0] + 0.5) * 2 / w - 1
     grid[..., 1] += torch.arange(h, device=device).view(1, h, 1)
-    grid[..., 1] = grid[..., 1] * 2 / h - 1
+    grid[..., 1] = (grid[..., 1] + 0.5) * 2 / h - 1
 
     return F.grid_sample(source, grid, padding_mode="border", align_corners=False)
 

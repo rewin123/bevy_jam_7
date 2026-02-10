@@ -53,7 +53,7 @@ from utils.transforms import FlowAwareResize, FlowAwareRandomHorizontalFlip, Flo
 MODEL_TYPE = "model5_seq"
 
 # Style image path (single style per training run)
-STYLE_IMAGE = os.path.join(_PROJECT_DIR, "assets/styles/kandinskiy.jpg")
+STYLE_IMAGE = os.path.join(_PROJECT_DIR, "assets/styles/manga.png")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
@@ -69,7 +69,7 @@ TENSORBOARD_DIR = "runs"
 
 # Training
 EPOCHS = 20000
-BATCH_SIZE = 4*2
+BATCH_SIZE = 4
 LR = 1e-3
 NUM_WORKERS = 4
 
@@ -89,9 +89,9 @@ LAMBDA_O = 2e5    # output temporal loss weight
 # Loss warm-up schedule (sequence-frame only)
 # Each weight ramps linearly from 0 to full over its range of steps.
 # Content is always at full weight; the others phase in sequentially.
-WARMUP_STYLE   = (200, 400)    # steps 0..100: STYLE_WEIGHT ramps 0→1
-WARMUP_LAMBDA_F = (400, 600) # steps 100..200: LAMBDA_F ramps 0→1
-WARMUP_LAMBDA_O = (600, 800) # steps 200..300: LAMBDA_O ramps 0→1
+WARMUP_STYLE   = (100, 200)    # steps 0..100: STYLE_WEIGHT ramps 0→1
+WARMUP_LAMBDA_F = (200, 300) # steps 100..200: LAMBDA_F ramps 0→1
+WARMUP_LAMBDA_O = (200, 300) # steps 200..300: LAMBDA_O ramps 0→1
 
 # Logging
 LOG_INTERVAL = 25      # log losses every N steps
@@ -197,7 +197,12 @@ def train():
 
     # TensorBoard + output dirs
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    writer = SummaryWriter(TENSORBOARD_DIR)
+    from datetime import datetime
+    style_name = os.path.splitext(os.path.basename(STYLE_IMAGE))[0]
+    run_name = f"{MODEL_TYPE}_{style_name}_{datetime.now():%Y%m%d_%H%M%S}"
+    run_dir = os.path.join(TENSORBOARD_DIR, run_name)
+    writer = SummaryWriter(run_dir)
+    print(f"TensorBoard run: {run_dir}")
 
     # Test image for visualization
     test_img = style_img  # use style image as test (always available)

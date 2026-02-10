@@ -26,16 +26,18 @@ class InvertedBottleneck(nn.Module):
     All convs bias=False (norm layers handle bias).
     """
 
-    def __init__(self, channels: int, expanded: int):
+    def __init__(self, channels: int, expanded: int, dilation: int = 1):
         super().__init__()
+        pad = dilation  # ReflectionPad = dilation for 3x3 dilated conv
         self.block = nn.Sequential(
             # Expand: 32->192, 6144 params
             nn.Conv2d(channels, expanded, 1, bias=False),
             nn.InstanceNorm2d(expanded, affine=True),  # 384 params
             nn.ReLU6(inplace=True),
-            # Depthwise: 192 dw, 1728 params
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(expanded, expanded, 3, groups=expanded, bias=False),
+            # Depthwise: 192 dw, 1728 params (dilation increases RF, 0 extra params)
+            nn.ReflectionPad2d(pad),
+            nn.Conv2d(expanded, expanded, 3, groups=expanded, bias=False,
+                      dilation=dilation),
             nn.InstanceNorm2d(expanded, affine=True),  # 384 params
             nn.ReLU6(inplace=True),
             # Compress: 192->32, 6144 params
