@@ -22,14 +22,15 @@ Bevy рендерит 3D → Screenshot API (100ms) → CPU → ort inference th
 - `main.rs` — точка входа, plugins, `--screenshot-and-exit`
 - `player.rs` — FPS контроллер (WASD + mouselook, avian3d physics, jump)
 - `level.rs` — загрузка Blender glTF через Skein + fallback процедурка
-- `style_transfer.rs` — ort инференс в отдельном потоке (3 backend'а через features)
+- `style_transfer.rs` — ort инференс в отдельном потоке, динамический словарь моделей из `assets/models/styles/`
 - `post_process.rs` — render target, Screenshot capture, fullscreen display, keyboard switch (0-9)
 - `fever.rs` — авто-смена стилей каждые 15 сек
 
-**Features (взаимоисключающие):**
-- `style-johnson` (default) — 5 фиксированных стилей, 224x224, 0-255
-- `style-adain` — произвольные стили из `assets/styles/`, 256x256, 0-1
-- `style-microast` — лёгкая модель, произвольные стили, 512x512, 0-1
+**Модели стилей:**
+- Кладём `.onnx` файлы в `assets/models/styles/`
+- Каждая модель: input `"input"` [1,3,H,W] float32 [0,1] → output `"output"` [1,3,H,W] [0,1]
+- Обнаруживаются при старте, сортируются по алфавиту
+- Загружаются лениво при первом использовании
 
 ## Системные зависимости (Linux)
 
@@ -43,12 +44,10 @@ apt-get install -y \
 ## Сборка и запуск
 
 ```bash
-cargo run --release                          # default (Johnson)
-cargo run --release --features style-adain   # AdaIN backend
-cargo run --release --features style-microast # MicroAST backend
+cargo run --release
 ```
 
-**Управление:** WASD — движение, мышь — обзор, ЛКМ — захват курсора, Escape — отпустить, 0 — raw сцена, 1-5 — конкретный стиль.
+**Управление:** WASD — движение, мышь — обзор, ЛКМ — захват курсора, Escape — отпустить, 0 — raw сцена, 1-9 — стиль (по алфавиту из `assets/models/styles/`), B — вкл/выкл EMA-блендинг, `[`/`]` — уменьшить/увеличить alpha EMA.
 
 ## Blender + Skein workflow
 
@@ -68,24 +67,25 @@ cargo run --release --features style-microast # MicroAST backend
 ```
 assets/
 ├── levels/Untitled.glb          # Blender уровень (активный)
-├── models/                      # ONNX модели
-│   ├── candy-9.onnx             # Johnson (5 шт по ~6.5MB)
-│   ├── mosaic-9.onnx
-│   ├── rain-princess-9.onnx
-│   ├── udnie-9.onnx
-│   ├── pointilism-9.onnx
-│   ├── adain-vgg.onnx           # AdaIN encoder (14MB)
-│   ├── adain-decoder.onnx       # AdaIN decoder (14MB)
-│   └── microast.onnx (+.data)   # MicroAST (281KB + 1.8MB)
-└── styles/                      # Стили для AdaIN/MicroAST
+└── models/
+    └── styles/                  # Динамический словарь стилей
+        ├── manga.onnx           # Кастомные Model5Seq модели (~87KB)
+        └── ...                  # Добавлять .onnx файлы сюда
+```
+
+**Экспорт новой модели:**
+```bash
+cd training && uv run python export_onnx.py \
+    --model outputs/best_model.pth \
+    --model-type model5_seq \
+    --out ../assets/models/styles/name.onnx
 ```
 
 ## Верификация
 
 ```bash
-# Screenshot test
-xvfb-run -a -s "-screen 0 1280x720x24" timeout 15 cargo run --release -- --screenshot-and-exit
-# → screenshot-0.png — открыть и посмотреть визуально
+cargo run --release
+# Нажать 0 (raw сцена), 1 (первый стиль), проверить визуально
 ```
 
 На скриншоте должна быть стилизованная 3D-сцена (объекты узнаваемы, текстуры художественные).
@@ -191,7 +191,7 @@ app.add_observer(|trigger: On<Add, MyMarker>, ...| { ... });
 - [x] Физика/коллайдеры (avian3d) — базовый контроллер + маркер AutoMeshCollider
 - [ ] Glitch-эффекты при смене стилей
 - [ ] README.md (требование джема)
-- [ ] wonnx GPU pipeline (Фаза 2, после джема)
+- [ ] GPU inference (ort CUDA/wonnx, после джема)
 
 ## Ссылки
 
