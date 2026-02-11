@@ -1,20 +1,20 @@
 //! Burn-based inference backend for style transfer.
 //!
 //! Uses burn-import generated model code from ONNX files.
-//! Supports NdArray (CPU) backend, compatible with WASM.
+//! Uses wgpu (GPU) backend for accelerated inference.
+//! Burn creates its own wgpu device (separate from Bevy's renderer).
 //!
-//! On native: runs inference in a separate thread (same as ort backend).
-//! On WASM: runs inference synchronously in a Bevy system (no threads).
+//! On native: runs inference in a separate thread with sync GPU readback.
+//! On WASM: async device init via `spawn_local`, sync forward pass,
+//!          async GPU readback via `into_data_async`.
 
 #![cfg(feature = "burn-backend")]
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
-use burn::backend::NdArray;
+use burn::backend::Wgpu;
 use burn::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
@@ -22,7 +22,7 @@ use crate::inference_common::*;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::style_transfer::scan_model_directory;
 
-type BurnBackend = NdArray<f32>;
+type BurnBackend = Wgpu;
 
 // Include all generated burn models.
 // Each .onnx file in assets/models/styles/ generates a module during build.
@@ -51,14 +51,8 @@ fn rgba_to_burn_tensor(
     )
 }
 
-/// Convert a burn tensor [1, 3, H, W] float32 [0, 1] to RGBA pixels
-fn burn_tensor_to_rgba(tensor: Tensor<BurnBackend, 4>) -> Vec<u8> {
-    let shape = tensor.shape();
-    let h = shape.dims[2];
-    let w = shape.dims[3];
-
-    let data: Vec<f32> = tensor.into_data().to_vec().unwrap();
-
+/// Convert CHW float32 data [3, H, W] in [0,1] to RGBA pixel buffer
+fn chw_f32_to_rgba(data: &[f32], w: usize, h: usize) -> Vec<u8> {
     let mut rgba = vec![255u8; w * h * 4];
     for y in 0..h {
         for x in 0..w {
@@ -69,6 +63,16 @@ fn burn_tensor_to_rgba(tensor: Tensor<BurnBackend, 4>) -> Vec<u8> {
         }
     }
     rgba
+}
+
+/// Convert a burn tensor [1, 3, H, W] float32 [0, 1] to RGBA pixels (sync readback)
+#[cfg(not(target_arch = "wasm32"))]
+fn burn_tensor_to_rgba(tensor: Tensor<BurnBackend, 4>) -> Vec<u8> {
+    let shape = tensor.shape();
+    let h = shape.dims[2];
+    let w = shape.dims[3];
+    let data: Vec<f32> = tensor.into_data().to_vec().unwrap();
+    chw_f32_to_rgba(&data, w, h)
 }
 
 // ===== Native (threaded) path =====
@@ -132,7 +136,7 @@ fn burn_inference_thread_main(
     test_mode: bool,
     test_done: Arc<AtomicBool>,
 ) {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = burn::backend::wgpu::WgpuDevice::default();
     let num_models = model_names.len();
     let mut current_model = 0usize;
     let mut test_saved = false;
@@ -222,23 +226,43 @@ fn burn_inference_thread_main(
     info!("Inference thread (burn): shutting down");
 }
 
-// ===== WASM (synchronous) path =====
+// ===== WASM (async wgpu) path =====
+//
+// On WASM, wgpu device creation and GPU buffer readback are inherently async
+// (JavaScript Promises). cubecl's `read_sync` uses `poll_once` which panics
+// if the future isn't immediately ready.
+//
+// Solution:
+// 1. Async device init via `spawn_local` + `init_setup_async`
+// 2. Model loading after device init (tensor writes to GPU are sync)
+// 3. Forward pass is sync (all GPU compute, no CPU readback)
+// 4. Output readback via `into_data_async` in a `spawn_local` task
 
-/// Holds burn models and inference-side channel ends for WASM sync inference.
-///
-/// On WASM, there are no threads — this system directly receives frames,
-/// runs inference, and sends results back through channels.
+#[cfg(target_arch = "wasm32")]
+use std::sync::Mutex;
+
+/// Initialization phase for the WASM burn backend
+#[cfg(target_arch = "wasm32")]
+enum WasmInitPhase {
+    /// Async wgpu device init + model loading in progress
+    Initializing,
+    /// Models loaded, ready for inference
+    Ready(Vec<BurnModelWrapper>),
+}
+
+/// Holds burn models and async state for WASM inference.
 #[cfg(target_arch = "wasm32")]
 pub struct BurnWasmState {
-    models: Vec<BurnModelWrapper>,
+    phase: Arc<Mutex<WasmInitPhase>>,
     current: usize,
     recv_frame: Receiver<FrameData>,
     send_styled: Sender<StyledFrame>,
     recv_switch: Receiver<StyleSwitch>,
+    /// Prevents overlapping async readback tasks
+    inference_running: Arc<AtomicBool>,
 }
 
 // SAFETY: wasm32 is single-threaded, so Send+Sync are trivially satisfied.
-// These impls allow BurnWasmState to be used as a Bevy Resource.
 #[cfg(target_arch = "wasm32")]
 unsafe impl Send for BurnWasmState {}
 #[cfg(target_arch = "wasm32")]
@@ -247,7 +271,7 @@ unsafe impl Sync for BurnWasmState {}
 #[cfg(target_arch = "wasm32")]
 impl Resource for BurnWasmState {}
 
-/// Setup burn inference for WASM — loads models synchronously, no threads
+/// Setup burn inference for WASM — async device init + model loading
 #[cfg(target_arch = "wasm32")]
 pub fn setup_burn_inference_thread(
     mut commands: Commands,
@@ -262,23 +286,46 @@ pub fn setup_burn_inference_thread(
         commands.insert_resource(TestInferenceDone(test_done));
     }
 
-    // On WASM, filesystem is unavailable — use build-time generated model names
     let names = burn_model_names();
-    info!("Style models (burn backend, wasm): {:?}", names);
+    info!("Style models (burn backend, wasm/wgpu): {:?}", names);
 
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
-    let burn_models = load_burn_models(&device);
+    let phase = Arc::new(Mutex::new(WasmInitPhase::Initializing));
+    let phase_clone = phase.clone();
 
-    // Store the inference-side channel ends + models in BurnWasmState
+    // Async initialization: wgpu device creation is a JS Promise,
+    // so we must use spawn_local to await it.
+    wasm_bindgen_futures::spawn_local(async move {
+        use burn::backend::wgpu::{RuntimeOptions, init_setup_async};
+        use burn::backend::wgpu::graphics::AutoGraphicsApi;
+
+        let device = burn::backend::wgpu::WgpuDevice::default();
+        info!("WASM: initializing wgpu device async...");
+
+        // Pre-register the cubecl compute client so subsequent
+        // ComputeClient::load() calls find it without calling DeviceState::init
+        let _setup = init_setup_async::<AutoGraphicsApi>(
+            &device,
+            RuntimeOptions::default(),
+        )
+        .await;
+        info!("WASM: wgpu device initialized");
+
+        // Model loading: from_data writes to GPU (sync after device init)
+        let models = load_burn_models(&device);
+        info!("WASM: {} burn models loaded", models.len());
+
+        *phase_clone.lock().unwrap() = WasmInitPhase::Ready(models);
+    });
+
     commands.insert_resource(BurnWasmState {
-        models: burn_models,
+        phase,
         current: 0,
         recv_frame,
         send_styled,
         recv_switch,
+        inference_running: Arc::new(AtomicBool::new(false)),
     });
 
-    // Store the main-thread-side channel ends (used by post_process, fever, etc.)
     commands.insert_resource(StyleChannels {
         send_frame,
         recv_styled,
@@ -287,44 +334,84 @@ pub fn setup_burn_inference_thread(
     commands.insert_resource(CurrentStyle { index: 0, names });
 }
 
-/// WASM: synchronous inference system — processes one frame per Bevy Update tick
+/// WASM inference system: sync forward pass + async GPU readback
 #[cfg(target_arch = "wasm32")]
 pub fn burn_wasm_inference_system(mut state: ResMut<BurnWasmState>) {
     // Process style switch commands
     while let Ok(switch) = state.recv_switch.try_recv() {
-        if !state.models.is_empty() {
-            state.current = switch.index % state.models.len();
+        let model_count = state
+            .phase
+            .lock()
+            .ok()
+            .and_then(|p| match &*p {
+                WasmInitPhase::Ready(models) => Some(models.len()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        if model_count > 0 {
+            state.current = switch.index % model_count;
         }
     }
 
-    // Try to receive a frame from the main thread
+    // Don't start new inference if async readback is still running
+    if state.inference_running.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Try to receive a frame
     let Ok(frame) = state.recv_frame.try_recv() else {
         return;
     };
 
-    if state.models.is_empty() {
-        return;
-    }
+    // Forward pass (sync): lock models briefly, run GPU compute, release lock
+    let output_tensor = {
+        let phase = state.phase.lock().unwrap();
+        let models = match &*phase {
+            WasmInitPhase::Ready(models) if !models.is_empty() => models,
+            _ => return, // Still initializing or no models
+        };
 
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
-    let w = RENDER_WIDTH as usize;
-    let h = RENDER_HEIGHT as usize;
-    let resized = resize_rgba(
-        &frame.pixels,
-        frame.width,
-        frame.height,
-        RENDER_WIDTH,
-        RENDER_HEIGHT,
-    );
+        let w = RENDER_WIDTH as usize;
+        let h = RENDER_HEIGHT as usize;
+        let device = burn::backend::wgpu::WgpuDevice::default();
+        let resized = resize_rgba(
+            &frame.pixels,
+            frame.width,
+            frame.height,
+            RENDER_WIDTH,
+            RENDER_HEIGHT,
+        );
 
-    let input_tensor = rgba_to_burn_tensor(&resized, w, h, &device);
-    let model_idx = state.current % state.models.len();
-    let output_tensor = run_burn_inference(&state.models[model_idx], input_tensor);
-    let output_rgba = burn_tensor_to_rgba(output_tensor);
+        let input = rgba_to_burn_tensor(&resized, w, h, &device);
+        let model_idx = state.current % models.len();
+        run_burn_inference(&models[model_idx], input)
+        // phase guard dropped here
+    };
 
-    let _ = state.send_styled.try_send(StyledFrame {
-        pixels: output_rgba,
-        width: RENDER_WIDTH,
-        height: RENDER_HEIGHT,
+    // Async readback: GPU→CPU buffer mapping is a JS Promise on WASM
+    let send = state.send_styled.clone();
+    let running = state.inference_running.clone();
+    running.store(true, Ordering::Relaxed);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        match output_tensor.into_data_async().await {
+            Ok(data) => {
+                let values: Vec<f32> = data.to_vec().unwrap();
+                let rgba = chw_f32_to_rgba(
+                    &values,
+                    RENDER_WIDTH as usize,
+                    RENDER_HEIGHT as usize,
+                );
+                let _ = send.try_send(StyledFrame {
+                    pixels: rgba,
+                    width: RENDER_WIDTH,
+                    height: RENDER_HEIGHT,
+                });
+            }
+            Err(e) => {
+                warn!("WASM burn readback error: {e}");
+            }
+        }
+        running.store(false, Ordering::Relaxed);
     });
 }

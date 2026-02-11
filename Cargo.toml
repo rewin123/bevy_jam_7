@@ -21,12 +21,19 @@ avian3d = "0.5"
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "ndarray"], optional = true }
 ndarray = { version = "0.17", optional = true }
 
-# burn backend (WASM-compatible) — use git tag v0.20.1 with zip/candle-core compat patches
-burn = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", default-features = false, features = ["ndarray"], optional = true }
+# burn backend (GPU-accelerated via wgpu) — use git tag v0.20.1
+burn = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", default-features = false, features = ["wgpu"], optional = true }
 burn-store = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", features = ["burnpack"], optional = true }
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4"
 
 [build-dependencies]
 burn-import = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", optional = true }
+
+# Patch cubecl-wgpu to use wgpu 27 (matching Bevy 0.18) instead of wgpu 26.
+# This eliminates the naga 26/27 coexistence issue and enables potential GPU device sharing.
+[patch.crates-io]
+cubecl-wgpu = { path = "cubecl-fork/crates/cubecl-wgpu" }
 
 [profile.dev]
 opt-level = 1
@@ -38,3 +45,16 @@ opt-level = 3
 inherits = "release"
 opt-level = "s"
 strip = "debuginfo"
+
+# WASM getrandom support
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
+
+# bevy_cli configuration
+[package.metadata.bevy_cli.web]
+default-features = false
+features = ["burn-backend"]
+
+[package.metadata.bevy_cli.web.release]
+wasm-opt = true

@@ -28,3 +28,12 @@ training/runs/
 
 
 *.pyc
+
+# cubecl-fork: only cubecl-wgpu is needed (patched for wgpu 27)
+cubecl-fork/*
+!cubecl-fork/crates/
+cubecl-fork/crates/*
+!cubecl-fork/crates/cubecl-wgpu/
+
+# WASM build output
+web/

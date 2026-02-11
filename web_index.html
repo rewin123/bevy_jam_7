@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fever Dream — Bevy Jam #7</title>
+    <style>
+        body { margin: 0; padding: 0; background: #1a1a2e; overflow: hidden; }
+        canvas { width: 100vw; height: 100vh; display: block; }
+        #loading { color: #fff; font-family: monospace; font-size: 1.5em;
+                   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading Fever Dream...</div>
+    <script type="module">
+        import init from './fever_dream.js';
+        init().then(() => {
+            document.getElementById('loading').style.display = 'none';
+        }).catch(e => {
+            document.getElementById('loading').textContent = 'Error: ' + e;
+            console.error(e);
+        });
+    </script>
+</body>
+</html>
