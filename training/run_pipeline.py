@@ -108,7 +108,7 @@ NUM_WORKERS = 4
 LR             = Timeline([(0, 1e-3)])
 GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 
-bw = 100
+bw = 500
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
 content_scale = 1e-1
@@ -117,7 +117,7 @@ content_scale = 1e-1
 CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
 STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 10.0 * style_scale)])
 TV_WEIGHT      = Timeline([(400, 0.0), (500, 1.0)])
-PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.1)])
+PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.0)])
 LAMBDA_F       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 1.0)])
 LAMBDA_O       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 2.0)])
 

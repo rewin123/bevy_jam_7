@@ -77,46 +77,47 @@ class Model5Seq(SequenceStyleModel):
 
         self.encoder = nn.Sequential(
             nn.ReflectionPad2d(2),
-            nn.Conv2d(3, 32, kernel_size=5, stride=2),
+            nn.Conv2d(3, 32, kernel_size=5, stride=2, bias=False),
             # nn.InstanceNorm2d(16, affine=True),
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
             nn.ReflectionPad2d(1),
             nn.Conv2d(32, 32, kernel_size=3, stride=2, groups=16, bias=False),
-            nn.Conv2d(32, 64, kernel_size=1),
+            nn.Conv2d(32, 64, kernel_size=1, bias=False),
             # nn.InstanceNorm2d(32, affine=True),
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
         )
 
         self.attn = LinearSpatialAttention(in_channels=16, dim=4)
         # Dilated residual stack: dilation 1, 2, 4 for large receptive field
         self.residual = nn.Sequential(
-            InvertedBottleneck(64, 192, dilation=2),
+            InvertedBottleneck(64, 192, dilation=8),
             InvertedBottleneck(64, 192, dilation=1),
+            InvertedBottleneck(64, 192, dilation=2),
         )
 
         self.decoder = nn.Sequential(
 
             nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
 
             nn.ReflectionPad2d(2),
-            nn.Conv2d(32, 32, kernel_size=5),
-            nn.ReLU6(inplace=True),
+            nn.Conv2d(32, 32, kernel_size=5, bias=False),
+            nn.SiLU(inplace=True),
 
             # nn.InstanceNorm2d(16, affine=True),
             # nn.BatchNorm2d(16),
-            nn.ReLU6(inplace=True),
-            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+            nn.SiLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2, bias=False),
             # nn.InstanceNorm2d(8, affine=True),
             # nn.BatchNorm2d(8),
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
 
             nn.ReflectionPad2d(2),
-            nn.Conv2d(16, 16, kernel_size=5),
+            nn.Conv2d(16, 16, kernel_size=5, bias=False),
             nn.PReLU(16),
 
             # nn.ReflectionPad2d(2),
-            nn.Conv2d(16, 3, kernel_size=1),
+            nn.Conv2d(16, 3, kernel_size=1, bias=False),
         )
 
     def train_resolution(self) -> tuple[int, int]:
@@ -124,10 +125,6 @@ class Model5Seq(SequenceStyleModel):
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         x = self.encoder(x)
-        # Split-channel attention: first half through attention, second half identity
-        # x_attn, x_skip = x[:, :16], x[:, 16:]
-        # x_attn = self.attn(x_attn)
-        # x = torch.cat([x_attn, x_skip], dim=1)
         return self.residual(x)
 
     def decode(self, features: torch.Tensor) -> torch.Tensor:

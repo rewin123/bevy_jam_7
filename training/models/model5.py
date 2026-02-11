@@ -33,13 +33,13 @@ class InvertedBottleneck(nn.Module):
             # Expand: 32->192, 6144 params
             nn.Conv2d(channels, expanded, 1, bias=False),
             nn.InstanceNorm2d(expanded, affine=True),  # 384 params
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
             # Depthwise: 192 dw, 1728 params (dilation increases RF, 0 extra params)
             nn.ReflectionPad2d(pad),
             nn.Conv2d(expanded, expanded, 3, groups=expanded, bias=False,
-                      dilation=dilation),
+                      dilation=dilation, bias=False),
             nn.InstanceNorm2d(expanded, affine=True),  # 384 params
-            nn.ReLU6(inplace=True),
+            nn.SiLU(inplace=True),
             # Compress: 192->32, 6144 params
             nn.Conv2d(expanded, channels, 1, bias=False),
             nn.InstanceNorm2d(channels, affine=True),  # 64 params

@@ -1,7 +1,7 @@
 """Frozen VGG16 feature extractor for perceptual losses.
 
-Extracts features at relu1_2, relu2_2, relu3_3, relu4_3
-(torchvision VGG16 feature indices 3, 8, 15, 22).
+Extracts features at relu1_2, relu2_2, relu3_3, relu4_3, relu5_1, relu5_2, relu5_3
+(torchvision VGG16 feature indices 3, 8, 15, 22, 24, 26, 29).
 
 Based on ReCoNet/vgg.py.
 """
@@ -13,11 +13,11 @@ import torch.nn as nn
 class VGG16Features(nn.Module):
     """Frozen VGG16 feature extractor.
 
-    Returns list of 4 feature maps at relu1_2, relu2_2, relu3_3, relu4_3.
+    Returns list of 7 feature maps at relu1_2, relu2_2, relu3_3, relu4_3, relu5_1, relu5_2, relu5_3.
     Input must be ImageNet-normalized (use preprocess_for_vgg from losses.py).
     """
 
-    LAYERS_OF_INTEREST = {3, 8, 15, 22}
+    LAYERS_OF_INTEREST = {3, 8, 15, 22, 24, 26, 29}
 
     def __init__(self, weights_path: str | None = None):
         super().__init__()
@@ -34,7 +34,7 @@ class VGG16Features(nn.Module):
 
             model = vgg16(weights=VGG16_Weights.IMAGENET1K_V1)
 
-        features = list(model.features)[:23]  # up to relu4_3
+        features = list(model.features)[:30]  # up to relu5_3
         self.layers = nn.ModuleList(features)
         self.eval()
         for param in self.parameters():

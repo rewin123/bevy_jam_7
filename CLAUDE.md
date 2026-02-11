@@ -25,6 +25,7 @@ Bevy рендерит 3D → Screenshot API (100ms) → CPU → ort inference th
 - `style_transfer.rs` — ort инференс в отдельном потоке, динамический словарь моделей из `assets/models/styles/`
 - `post_process.rs` — render target, Screenshot capture, fullscreen display, keyboard switch (0-9)
 - `fever.rs` — авто-смена стилей каждые 15 сек
+- `tooltip.rs` — система всплывающих подсказок, trigger zones через Skein
 
 **Модели стилей:**
 - Кладём `.onnx` файлы в `assets/models/styles/`
@@ -184,11 +185,159 @@ app.add_observer(|trigger: On<Add, MyMarker>, ...| { ... });
 
 - `fever_dream::level::PlayerStart` — пустой объект в Blender, задаёт точку спавна игрока
 - `fever_dream::level::AutoMeshCollider` — на мешах, автоматически генерирует trimesh-коллайдер + RigidBody::Static
+- `fever_dream::tooltip::TooltipTrigger` — сферическая trigger zone для всплывающих подсказок
+
+### Система Tooltips
+
+**TooltipTrigger** — компонент для создания зон с всплывающими подсказками через Blender.
+
+**Поля:**
+```rust
+pub struct TooltipTrigger {
+    pub text: String,           // Текст подсказки
+    pub size: f32,              // Радиус trigger zone в метрах (default: 2.0)
+    pub duration: f32,          // Длительность показа в секундах (default: 0.0)
+                                // 0 = держать пока игрок в зоне, >0 = фиксированное время
+    pub trigger_once: bool,     // Сработать только один раз (default: true)
+}
+```
+
+**Workflow в Blender:**
+1. Создать Empty object в нужной позиции
+2. В Skein Panel добавить компонент `fever_dream::tooltip::TooltipTrigger`
+3. Настроить поля:
+   - **text:** текст подсказки (например, "Welcome to the dream...")
+   - **size:** радиус сферы триггера (2.0 = радиус 2 метра)
+   - **duration:** длительность показа:
+     - **0** = держать пока игрок в зоне (исчезает при выходе)
+     - **>0** = фиксированное время в секундах (например, 3.0)
+   - **trigger_once:** true = показать один раз, false = повторно при входе/выходе
+4. Export glTF
+
+**Визуальный дизайн:**
+- Полупрозрачный черный фон (alpha 0.9)
+- Белый текст, font size 32px
+- Позиция: нижняя треть экрана, центрирован горизонтально
+- Плавные fade-in (0.3s) / fade-out (0.3s) анимации
+- Отображается поверх styled image (GlobalZIndex 11)
+- Максимальная ширина: 600px, padding: 24px
+
+**Пример glTF extras:**
+```json
+{
+  "extras": {
+    "skein": [
+      {
+        "fever_dream::tooltip::TooltipTrigger": {
+          "text": "Welcome to the fever dream...",
+          "size": 2.0,
+          "duration": 3.0,
+          "trigger_once": true
+        }
+      }
+    ]
+  }
+}
+```
+
+## Puzzle System
+
+Профессиональная система головоломок в стиле Portal с хватаемыми объектами, кнопками, дверями и логическими гейтами.
+
+### Компоненты
+
+**Grabbable Objects:**
+- `WeightedCube` - хватаемый кубик с массой (автоматически добавляет Grabbable)
+- `Grabbable` - маркер для хватаемых объектов (настройка spring physics)
+
+**Pressure Plates:**
+- `PressurePlate` - кнопка-сенсор, устанавливает named state когда активирована
+
+**Doors:**
+- `Door` - дверь, двигается когда named state становится true
+
+**Logic Gates:**
+- `AndNamedState` - AND gate: все входы true → выход true
+- `OrNamedState` - OR gate: хотя бы один вход true → выход true
+
+### Управление
+
+- **F** - grab/release объекта перед камерой
+- Grabbable объекты подсвечиваются при наведении (emissive boost)
+- Объекты следуют за камерой с физической инерцией (spring physics)
+- При смене мира (E) grabbed объект переключается вместе с игроком
+
+### Тестовый уровень
+
+Запуск standalone теста:
+```bash
+cargo run --release -- --test-puzzle
+```
+
+Тестовый уровень включает:
+- 2 хватаемых кубика (красный и синий)
+- 2 кнопки (жёлтая и оранжевая)
+- AND gate (оба кубика на кнопках → дверь открывается)
+- Зелёная дверь
+
+### Blender Workflow
+
+**Создать кубик:**
+```
+1. Add Cube mesh
+2. Skein: fever_dream::puzzle_objects::WeightedCube
+   - mass: 10.0
+3. Skein: fever_dream::world_layer::WorldLayer
+   - world_0: true
+```
+
+**Создать кнопку:**
+```
+1. Add Cylinder (low height)
+2. Skein: fever_dream::puzzle_objects::PressurePlate
+   - state_name: "button1"
+   - trigger_radius: 1.0
+   - require_cube: true
+   - stay_pressed: false
+```
+
+**Создать AND gate:**
+```
+1. Add Empty
+2. Skein: fever_dream::puzzle_objects::AndNamedState
+   - inps: vec!["button1", "button2"]
+   - out_state: "door1_trigger"
+```
+
+**Создать дверь:**
+```
+1. Add Cube (door model)
+2. Skein: fever_dream::puzzle_objects::Door
+   - state_name: "door1_trigger"
+   - delta_position: Vec3::Y * 4.0
+   - speed: 2.0
+   - start_open: false
+```
+
+### Архитектура
+
+**Модули:**
+- `puzzle_state.rs` - централизованное хранилище состояний (PuzzleStateRegistry)
+- `interaction.rs` - grab система с spring physics и highlight
+- `puzzle_objects.rs` - компоненты головоломок (cubes, buttons, doors, gates)
+
+**Event Flow:**
+1. Cube на кнопке → PressurePlate fires StateChanged("button1", true)
+2. AndGate слушает StateChanged → вычисляет button1 && button2
+3. AndGate fires StateChanged("door_trigger", true)
+4. Door слушает StateChanged → начинает анимацию открытия
 
 ## TODO
 
 - [ ] Создать полноценный уровень в Blender
 - [x] Физика/коллайдеры (avian3d) — базовый контроллер + маркер AutoMeshCollider
+- [x] Система tooltips — всплывающие подсказки через TooltipTrigger
+- [x] Puzzle system — Portal-like головоломки (grab, кнопки, двери, логика)
 - [ ] Glitch-эффекты при смене стилей
 - [ ] README.md (требование джема)
 - [ ] GPU inference (ort CUDA/wonnx, после джема)

@@ -15,6 +15,10 @@ pub struct PlayerStart;
 #[reflect(Component)]
 pub struct AutoMeshCollider;
 
+/// Resource: marker for test puzzle mode (skip blender level loading)
+#[derive(Resource)]
+pub struct TestPuzzleMode;
+
 pub struct LevelPlugin;
 
 impl Plugin for LevelPlugin {
@@ -26,11 +30,22 @@ impl Plugin for LevelPlugin {
     }
 }
 
-fn spawn_blender_level(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_blender_level(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    test_mode: Option<Res<TestPuzzleMode>>,
+) {
+    // Skip loading blender level in test puzzle mode
+    if test_mode.is_some() {
+        info!("Test puzzle mode - skipping Blender level load");
+        return;
+    }
+
     commands
         .spawn(SceneRoot(
             asset_server.load(GltfAssetLabel::Scene(0).from_asset("levels/Untitled.glb")),
-        )).observe(on_scene_ready);
+        ))
+        .observe(on_scene_ready);
 }
 
 

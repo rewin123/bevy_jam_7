@@ -26,6 +26,8 @@ training/data/
 training/outputs/
 training/runs/
 
+assets/styles/*
+
 
 *.pyc
 

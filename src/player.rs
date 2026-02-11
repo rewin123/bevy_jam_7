@@ -130,7 +130,7 @@ fn player_movement(
     mut query: Query<(&FpsController, &mut LinearVelocity, Has<Grounded>), With<Player>>,
     mut commands: Commands,
 ) {
-    if keys.pressed(KeyCode::KeyE) {
+    if keys.just_pressed(KeyCode::KeyE) {
         commands.write_message(NextWorld {
             max_world: 2
         });
