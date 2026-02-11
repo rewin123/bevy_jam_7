@@ -22,7 +22,7 @@ impl Plugin for WorldLayerPlugin {
         app.insert_resource(ActiveWorld(0));
 
         app.add_observer(on_world_layer_added);
-        app.add_systems(Update, handle_world_switch);
+        app.add_systems(Update, (keyboard_world_switch, handle_world_switch).chain());
         app.add_systems(Last, propagate_world_layer);
     }
 }
@@ -60,6 +60,32 @@ impl Default for WorldLayer {
 }
 
 impl WorldLayer {
+    /// Create a `WorldLayer` that belongs to exactly one world.
+    pub fn from_world_index(idx: u32) -> Self {
+        let mut wl = Self {
+            world_0: false,
+            world_1: false,
+            world_2: false,
+            world_3: false,
+            world_4: false,
+            world_5: false,
+            world_6: false,
+            world_7: false,
+        };
+        match idx {
+            0 => wl.world_0 = true,
+            1 => wl.world_1 = true,
+            2 => wl.world_2 = true,
+            3 => wl.world_3 = true,
+            4 => wl.world_4 = true,
+            5 => wl.world_5 = true,
+            6 => wl.world_6 = true,
+            7 => wl.world_7 = true,
+            _ => wl.world_0 = true,
+        }
+        wl
+    }
+
     /// Convert bools to a bitmask (bit 0 = world_0, bit 1 = world_1, ...).
     pub fn to_mask(&self) -> u32 {
         let bools = [
@@ -223,5 +249,17 @@ fn handle_world_switch(
         if let Some(ref ch) = channels {
             let _ = ch.send_switch.try_send(StyleSwitch { index: style_idx });
         }
+    }
+}
+
+/// E key cycles through worlds: 0 → 1 → 2 → ... → 7 → 0.
+fn keyboard_world_switch(
+    keys: Res<ButtonInput<KeyCode>>,
+    active: Res<ActiveWorld>,
+    mut commands: Commands,
+) {
+    if keys.just_pressed(KeyCode::KeyE) {
+        let next = (active.0 + 1) % MAX_WORLDS as u32;
+        commands.write_message(ChangeWorldLayer(next));
     }
 }

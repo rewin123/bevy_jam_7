@@ -31,6 +31,7 @@ fn main() {
         PhysicsPlugins::default(),
         SkeinPlugin::default(),
         player::PlayerPlugin,
+        grab::GrabPlugin,
         level::LevelPlugin,
         style_transfer::StyleTransferPlugin,
         post_process::PostProcessPlugin,

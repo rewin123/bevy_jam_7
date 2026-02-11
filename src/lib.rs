@@ -2,6 +2,7 @@
 
 pub mod inference_common;
 pub mod fever;
+pub mod grab;
 pub mod level;
 pub mod player;
 pub mod post_process;
