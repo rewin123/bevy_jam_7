@@ -47,6 +47,34 @@ impl Plugin for PostProcessPlugin {
                 )
                     .chain(),
             );
+
+        // WebGL lacks TEXTURE_FORMAT_16BIT_NORM — downgrade any 16-bit images to 8-bit
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, downgrade_16bit_images);
+    }
+}
+
+/// Downgrade Rgba16Unorm images to Rgba8UnormSrgb for WebGL compatibility.
+/// Runs every frame but only processes newly added/changed images.
+#[cfg(target_arch = "wasm32")]
+fn downgrade_16bit_images(mut images: ResMut<Assets<Image>>) {
+    let ids: Vec<_> = images
+        .iter()
+        .filter(|(_, img)| img.texture_descriptor.format == TextureFormat::Rgba16Unorm)
+        .map(|(id, _)| id)
+        .collect();
+
+    for id in ids {
+        let Some(image) = images.get_mut(id) else {
+            continue;
+        };
+        // Convert 16-bit RGBA to 8-bit by taking high byte of each u16 (little-endian)
+        if let Some(ref data) = image.data {
+            let new_data: Vec<u8> = data.chunks_exact(2).map(|c| c[1]).collect();
+            image.data = Some(new_data);
+            image.texture_descriptor.format = TextureFormat::Rgba8UnormSrgb;
+            warn!("Downgraded Rgba16Unorm image to Rgba8UnormSrgb for WebGL");
+        }
     }
 }
 

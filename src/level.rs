@@ -79,10 +79,13 @@ fn spawn_lighting(mut commands: Commands) {
         &(0..=MAX_WORLDS).collect::<Vec<_>>(),
     );
 
+    // WebGL lacks TEXTURE_FORMAT_16BIT_NORM needed for shadow normal prepass
+    let shadows = !cfg!(target_arch = "wasm32");
+
     commands.spawn((
         DirectionalLight {
             illuminance: 10000.0,
-            shadows_enabled: true,
+            shadows_enabled: shadows,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.5, 0.0)),

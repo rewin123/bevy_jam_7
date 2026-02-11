@@ -24,6 +24,8 @@ ndarray = { version = "0.17", optional = true }
 # burn backend (GPU-accelerated via wgpu) — use git tag v0.20.1
 burn = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", default-features = false, features = ["wgpu"], optional = true }
 burn-store = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", features = ["burnpack"], optional = true }
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4"
 
 [build-dependencies]
 burn-import = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", optional = true }
@@ -43,3 +45,16 @@ opt-level = 3
 inherits = "release"
 opt-level = "s"
 strip = "debuginfo"
+
+# WASM getrandom support
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { version = "0.2", features = ["js"], package = "getrandom" }
+
+# bevy_cli configuration
+[package.metadata.bevy_cli.web]
+default-features = false
+features = ["burn-backend"]
+
+[package.metadata.bevy_cli.web.release]
+wasm-opt = true
