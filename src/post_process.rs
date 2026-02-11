@@ -4,7 +4,7 @@ use bevy::render::view::window::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy_camera::RenderTarget;
 
 use crate::player::PlayerCamera;
-use crate::style_transfer::{
+use crate::inference_common::{
     CurrentStyle, FrameData, StyleChannels, StyleSwitch, RENDER_HEIGHT, RENDER_WIDTH,
 };
 

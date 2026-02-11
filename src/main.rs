@@ -41,7 +41,7 @@ fn main() {
     ));
 
     if is_test_inference {
-        app.insert_resource(style_transfer::TestInferenceMode);
+        app.insert_resource(inference_common::TestInferenceMode);
         app.add_systems(Update, check_test_inference_done);
     }
 
@@ -53,7 +53,7 @@ fn main() {
 }
 
 fn check_test_inference_done(
-    test_done: Option<Res<style_transfer::TestInferenceDone>>,
+    test_done: Option<Res<inference_common::TestInferenceDone>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if let Some(done) = test_done {
