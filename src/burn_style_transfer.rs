@@ -1,7 +1,9 @@
 //! Burn-based inference backend for style transfer.
 //!
 //! Uses burn-import generated model code from ONNX files.
-//! Supports NdArray (CPU) backend, compatible with WASM.
+//! Uses wgpu (GPU) backend for accelerated inference.
+//! Burn creates its own wgpu device (separate from Bevy's renderer)
+//! because Bevy 0.18 uses wgpu 27 while Burn 0.20.1 uses wgpu 26.
 //!
 //! On native: runs inference in a separate thread (same as ort backend).
 //! On WASM: runs inference synchronously in a Bevy system (no threads).
@@ -14,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use bevy::prelude::*;
-use burn::backend::NdArray;
+use burn::backend::Wgpu;
 use burn::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
@@ -22,7 +24,7 @@ use crate::inference_common::*;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::style_transfer::scan_model_directory;
 
-type BurnBackend = NdArray<f32>;
+type BurnBackend = Wgpu;
 
 // Include all generated burn models.
 // Each .onnx file in assets/models/styles/ generates a module during build.
@@ -132,7 +134,7 @@ fn burn_inference_thread_main(
     test_mode: bool,
     test_done: Arc<AtomicBool>,
 ) {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = burn::backend::wgpu::WgpuDevice::default();
     let num_models = model_names.len();
     let mut current_model = 0usize;
     let mut test_saved = false;
@@ -266,7 +268,7 @@ pub fn setup_burn_inference_thread(
     let names = burn_model_names();
     info!("Style models (burn backend, wasm): {:?}", names);
 
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = burn::backend::wgpu::WgpuDevice::default();
     let burn_models = load_burn_models(&device);
 
     // Store the inference-side channel ends + models in BurnWasmState
@@ -306,7 +308,7 @@ pub fn burn_wasm_inference_system(mut state: ResMut<BurnWasmState>) {
         return;
     }
 
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = burn::backend::wgpu::WgpuDevice::default();
     let w = RENDER_WIDTH as usize;
     let h = RENDER_HEIGHT as usize;
     let resized = resize_rgba(

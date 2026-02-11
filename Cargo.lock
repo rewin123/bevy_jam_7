@@ -3947,6 +3947,7 @@ dependencies = [
  "burn-store",
  "crossbeam-channel",
  "image",
+ "naga 26.0.0",
  "ndarray",
  "ort",
  "rand",
