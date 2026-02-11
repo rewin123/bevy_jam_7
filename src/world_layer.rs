@@ -22,7 +22,7 @@ impl Plugin for WorldLayerPlugin {
         app.register_type::<WorldLayer>();
         app.insert_resource(ActiveWorld(0));
 
-        app.add_observer(on_world_layer_added);
+        app.add_systems(Update, on_world_layer_added);
         app.add_systems(Update, on_next_world);
         app.add_systems(Update, handle_world_switch);
         app.add_systems(Last, propagate_world_layer);
@@ -150,34 +150,38 @@ fn on_next_world(
 /// When a `WorldLayer` is added (e.g. from glTF/Skein), generate
 /// `RenderLayers` + `Propagate` + `CollisionLayers`.
 fn on_world_layer_added(
-    trigger: On<Add, WorldLayer>,
-    q: Query<&WorldLayer>,
+    // trigger: On<Change, WorldLayer>,
+    q: Query<(Entity, &WorldLayer), Changed<WorldLayer>>,
     mut commands: Commands,
 ) {
-    let entity = trigger.event_target();
-    let Ok(wl) = q.get(entity) else { return };
+    // let entity = trigger.event_target();
+    // let Ok(wl) = q.get(entity) else { return };
 
-    let render_layers = wl.to_render_layers();
-    let collision_layers = wl.to_collision_layers();
+    for (entity, wl) in &q {
+        let render_layers = wl.to_render_layers();
+        let collision_layers = wl.to_collision_layers();
 
-    info!(
-        "WorldLayer on {entity}: mask=0b{:08b}, render={:?}, collision={:?}",
-        wl.to_mask(),
-        render_layers,
-        collision_layers
-    );
+        info!(
+            "WorldLayer on {entity}: mask=0b{:08b}, render={:?}, collision={:?}",
+            wl.to_mask(),
+            render_layers,
+            collision_layers
+        );
 
-    commands.entity(entity).insert((
-        Propagate(render_layers),
-        collision_layers,
-    ));
+        commands.entity(entity).insert((
+            // Propagate(render_layers),
+            collision_layers,
+        ));
+
+        commands.entity(entity).insert_recursive::<Children>(render_layers);
+    }
 }
 
 /// Propagate `WorldLayer` down the hierarchy: if a child lacks its own
 /// `WorldLayer`, it inherits the parent's.  Children that already carry
 /// a `WorldLayer` keep their own value (propagation stops there).
 fn propagate_world_layer(
-    roots: Query<(&WorldLayer, &Children), Added<WorldLayer>>,
+    roots: Query<(&WorldLayer, &Children), Changed<WorldLayer>>,
     children_q: Query<Option<&Children>>,
     has_wl: Query<(), With<WorldLayer>>,
     mut commands: Commands,

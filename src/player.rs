@@ -4,6 +4,7 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
+use crate::level::PlayerStart;
 use crate::world_layer::NextWorld;
 
 #[derive(Component)]
@@ -48,6 +49,11 @@ impl Plugin for PlayerPlugin {
             Update,
             (grab_cursor, update_grounded, player_look, player_movement).chain(),
         );
+
+        app.add_systems(
+            Update,
+            on_player_start
+        );
     }
 }
 
@@ -61,7 +67,7 @@ fn spawn_player(mut commands: Commands) {
             Transform::from_xyz(0.0, 2.0, 0.0),
             Visibility::default(),
             // Physics
-            RigidBody::Dynamic,
+            RigidBody::Kinematic,
             Collider::capsule(0.4, 1.0),
             CollisionLayers::from_bits(1, 1 | (1 << 1)), // member=default, filter=default+world_0
             LockedAxes::ROTATION_LOCKED,
@@ -194,5 +200,25 @@ fn player_look(
     let pitch = ctrl.pitch;
     for mut cam_transform in &mut camera_q {
         cam_transform.rotation = Quat::from_rotation_x(pitch);
+    }
+}
+
+
+fn on_player_start(
+    mut q_players: Query<&mut Transform, With<Player>>,
+    q_starts: Query<&Transform, (Added<PlayerStart>, Without<Player>)>
+) {
+
+    if q_starts.count() == 0 {
+        return;
+    }
+
+    let Ok(st) = q_starts.single() else {
+        error!("Multiple player starts");
+        return;
+    };
+
+    for mut pt in &mut q_players {
+      pt.translation = st.translation;  
     }
 }

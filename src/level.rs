@@ -51,11 +51,11 @@ fn spawn_blender_level(
 
 fn with_auto_mesh(
     mut commands: Commands,
-    auto_colliders: Query<(Entity, &AutoMeshCollider, Option<&Children>)>,
+    auto_colliders: Query<(Entity, &AutoMeshCollider, Option<&Children>, Option<&RigidBody>)>,
     q_meshes: Query<&Mesh3d>,
     meshes: Res<Assets<Mesh>>,
 ) {
-    for (entity, _, children) in auto_colliders.iter() {
+    for (entity, _, children, rb) in auto_colliders.iter() {
         info!("New AutoMeshCollider");
         let Some(children) = children else {
             warn!("AutoMeshCollider without childrens");
@@ -66,7 +66,11 @@ fn with_auto_mesh(
             if let Ok(mesh_handle) = q_meshes.get(e) {
                 if let Some(mesh) = meshes.get(&mesh_handle.0) {
                     if let Some(collider) = Collider::trimesh_from_mesh(mesh) {
-                        commands.entity(entity).insert((RigidBody::Static, collider));
+                        if rb.is_none() {
+                            commands.entity(entity).insert((RigidBody::Static, collider));
+                        } else {
+                            commands.entity(entity).insert(collider);
+                        }
                         commands.entity(entity).remove::<AutoMeshCollider>();
                         info!("AutoMeshCollider: added trimesh collider to {entity}");
                     } else {
@@ -84,8 +88,13 @@ fn with_auto_mesh(
 fn on_scene_ready(
     _trigger: On<SceneInstanceReady>,
     mut commands: Commands,
+    q_players: Query<Entity, With<crate::player::Player>>
 ) {
     commands.write_message(ChangeWorldLayer(0));
+
+    for e in &q_players {
+        commands.entity(e).insert(RigidBody::Dynamic);
+    }
 }
 
 fn spawn_lighting(mut commands: Commands) {

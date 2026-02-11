@@ -49,6 +49,7 @@ impl Default for WeightedCube {
 fn setup_weighted_cube(mut commands: Commands, cubes: Query<Entity, Added<WeightedCube>>) {
     for entity in &cubes {
         commands.entity(entity).insert(Grabbable::default());
+        commands.entity(entity).insert(RigidBody::Dynamic);
         info!("Setup WeightedCube {entity}");
     }
 }

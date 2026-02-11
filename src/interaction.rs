@@ -332,7 +332,7 @@ fn sync_grabbed_object_world_layer(
         return;
     }
 
-    let grabbed_count = grabbed_q.iter().count();
+    let grabbed_count = grabbed_q.count();
     if grabbed_count == 0 {
         return;
     }

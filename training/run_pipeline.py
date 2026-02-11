@@ -84,7 +84,7 @@ class Timeline:
 MODEL_TYPE = "model5_seq"
 
 # Style images: single path, list of paths, or directory
-STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/candy.jpg")
+STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/manga_set")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
@@ -105,18 +105,18 @@ BATCH_SIZE = 4
 NUM_WORKERS = 4
 
 # All timelines: list of (step, value) with linear interpolation
-LR             = Timeline([(0, 1e-3)])
+LR             = Timeline([(0, 1e-4)])
 GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 
-bw = 500
+bw = 100
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
 content_scale = 1e-1
 
 # Loss weights (all losses are .mean()-normalized, raw values ~O(1))
 CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
-STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 10.0 * style_scale)])
-TV_WEIGHT      = Timeline([(400, 0.0), (500, 1.0)])
+STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 5.0 * style_scale)])
+TV_WEIGHT      = Timeline([(400, 0.0), (500, 0.0)])
 PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.0)])
 LAMBDA_F       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 1.0)])
 LAMBDA_O       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 2.0)])
