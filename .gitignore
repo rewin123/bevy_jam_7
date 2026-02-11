@@ -27,4 +27,5 @@ training/outputs/
 training/runs/
 
 
-*.pyc
+*.pyccubecl-fork/target/
+cubecl-fork/Cargo.lock

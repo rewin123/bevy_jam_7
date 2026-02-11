@@ -25,13 +25,13 @@ ndarray = { version = "0.17", optional = true }
 burn = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", default-features = false, features = ["wgpu"], optional = true }
 burn-store = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", features = ["burnpack"], optional = true }
 
-# Fix naga 26 (burn/cubecl) + naga 27 (bevy) coexistence: feature unification causes
-# codespan-reporting to get `termcolor` feature (from naga 27), but naga 26's DiagnosticBuffer
-# wraps String (no termcolor feature) which doesn't impl WriteColor. Force termcolor on naga 26.
-naga_v26 = { package = "naga", version = "=26.0.0", features = ["termcolor"] }
-
 [build-dependencies]
 burn-import = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", optional = true }
+
+# Patch cubecl-wgpu to use wgpu 27 (matching Bevy 0.18) instead of wgpu 26.
+# This eliminates the naga 26/27 coexistence issue and enables potential GPU device sharing.
+[patch.crates-io]
+cubecl-wgpu = { path = "cubecl-fork/crates/cubecl-wgpu" }
 
 [profile.dev]
 opt-level = 1
