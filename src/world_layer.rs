@@ -17,11 +17,13 @@ impl Plugin for WorldLayerPlugin {
         app.add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate));
 
         app.add_message::<ChangeWorldLayer>();
+        app.add_message::<NextWorld>();
 
         app.register_type::<WorldLayer>();
         app.insert_resource(ActiveWorld(0));
 
         app.add_observer(on_world_layer_added);
+        app.add_systems(Update, on_next_world);
         app.add_systems(Update, handle_world_switch);
         app.add_systems(Last, propagate_world_layer);
     }
@@ -126,6 +128,24 @@ pub struct ChangeWorldLayer(pub u32);
 /// Tracks which world is currently active.
 #[derive(Resource)]
 pub struct ActiveWorld(pub u32);
+
+#[derive(Message)]
+pub struct NextWorld {
+    pub max_world: u32
+}
+
+fn on_next_world(
+    mut msgs: MessageReader<NextWorld>,
+    mut commands: Commands,
+    cur_world: Res<ActiveWorld>
+) {
+    let Some(msg) = msgs.read().last() else {
+        return;
+    };
+
+    let next = (cur_world.0 + 1) % msg.max_world;
+    commands.write_message(ChangeWorldLayer(next));
+}
 
 /// When a `WorldLayer` is added (e.g. from glTF/Skein), generate
 /// `RenderLayers` + `Propagate` + `CollisionLayers`.

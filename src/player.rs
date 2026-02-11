@@ -4,6 +4,8 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
+use crate::world_layer::NextWorld;
+
 #[derive(Component)]
 pub struct Player;
 
@@ -126,7 +128,15 @@ fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut query: Query<(&FpsController, &mut LinearVelocity, Has<Grounded>), With<Player>>,
+    mut commands: Commands,
 ) {
+    if keys.pressed(KeyCode::KeyE) {
+        commands.write_message(NextWorld {
+            max_world: 2
+        });
+    }
+
+
     for (ctrl, mut lin_vel, is_grounded) in &mut query {
         let yaw_rot = Quat::from_rotation_y(ctrl.yaw);
 

@@ -88,6 +88,7 @@ STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/candy.jpg")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
+GAME_DIR = "data/game"
 SINTEL_DIR = "data/sintel"
 FLYING_CHAIRS_DIR = "data/FlyingChairs_release"
 
@@ -122,7 +123,7 @@ LAMBDA_O       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 2.0)])
 
 # Dataset sampling weights (relative, normalized within each group)
 VIDEO_DATASET_WEIGHTS = {"sintel": 1.0, "chairs": 1.0}
-STATIC_DATASET_WEIGHTS = {"coco": 1.0}
+STATIC_DATASET_WEIGHTS = {"coco": 1.0, "game": 1.0}
 
 # Checkpoints & Logging
 CHECKPOINT_INTERVAL = 200
@@ -217,6 +218,12 @@ def train():
     chairs = FlyingChairsDataset(FLYING_CHAIRS_DIR, transform=flow_transform)
     coco = COCODataset(COCO_DIR, (h, w))
 
+    try:
+        game = COCODataset(GAME_DIR, (h, w))
+    except FileNotFoundError:
+        print(f"Warning: Game dataset not found at {GAME_DIR}, skipping")
+        game = None
+
     video_datasets = []
     video_weights = []
     for name, ds, weight_key in [("sintel", sintel, "sintel"), ("chairs", chairs, "chairs")]:
@@ -230,6 +237,9 @@ def train():
     if len(coco) > 0:
         static_datasets.append(("coco", coco))
         static_weights.append(STATIC_DATASET_WEIGHTS["coco"])
+    if game is not None and len(game) > 0:
+        static_datasets.append(("game", game))
+        static_weights.append(STATIC_DATASET_WEIGHTS["game"])
     assert static_datasets, "No static datasets found"
 
     video_loader = BalancedMultiLoader(
