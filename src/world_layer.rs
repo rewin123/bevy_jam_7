@@ -5,7 +5,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::player::{Player, PlayerCamera};
-use crate::style_transfer::{CurrentStyle, StyleChannels, StyleSwitch};
+use crate::inference_common::{CurrentStyle, StyleChannels, StyleSwitch};
 
 /// Total number of parallel worlds supported.
 pub const MAX_WORLDS: usize = 8;

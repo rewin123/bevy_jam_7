@@ -3,77 +3,38 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
+
+pub use crate::inference_common::*;
+
+// Re-export for backwards compatibility
+#[cfg(feature = "ort-backend")]
 use ndarray::Array4;
+#[cfg(feature = "ort-backend")]
 use ort::session::Session;
+#[cfg(feature = "ort-backend")]
 use ort::value::Tensor;
-
-// ===== Inference resolution =====
-// 512×288 — 16:9, matches training resolution
-pub const RENDER_WIDTH: u32 = 512;
-pub const RENDER_HEIGHT: u32 = 288;
-
-// ===== Common types =====
-
-pub struct FrameData {
-    pub pixels: Vec<u8>, // RGBA, row-major
-    pub width: u32,
-    pub height: u32,
-}
-
-pub struct StyledFrame {
-    pub pixels: Vec<u8>, // RGBA
-    pub width: u32,
-    pub height: u32,
-}
-
-pub struct StyleSwitch {
-    pub index: usize,
-}
-
-#[derive(Resource)]
-pub struct StyleChannels {
-    pub send_frame: Sender<FrameData>,
-    pub recv_styled: Receiver<StyledFrame>,
-    pub send_switch: Sender<StyleSwitch>,
-}
-
-#[derive(Resource)]
-pub struct CurrentStyle {
-    pub index: usize,
-    pub names: Vec<String>,
-}
-
-/// Insert this resource to enable test-inference mode:
-/// saves raw input + styled output from the first inference pass, then signals done.
-#[derive(Resource)]
-pub struct TestInferenceMode;
-
-/// Inserted when test mode is active. Becomes true when test frames are saved.
-#[derive(Resource)]
-pub struct TestInferenceDone(pub Arc<AtomicBool>);
 
 pub struct StyleTransferPlugin;
 
 impl Plugin for StyleTransferPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_inference_thread);
+        #[cfg(feature = "ort-backend")]
+        app.add_systems(Startup, setup_ort_inference_thread);
+
+        #[cfg(feature = "burn-backend")]
+        {
+            app.add_systems(Startup, crate::burn_style_transfer::setup_burn_inference_thread);
+
+            // On WASM, run inference synchronously in a Bevy system (no threads)
+            #[cfg(target_arch = "wasm32")]
+            app.add_systems(Update, crate::burn_style_transfer::burn_wasm_inference_system);
+        }
     }
 }
 
-// ===== Helpers =====
+// ===== ort backend =====
 
-/// Resize RGBA pixel buffer using Lanczos3 filter
-fn resize_rgba(pixels: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
-    if src_w == dst_w && src_h == dst_h {
-        return pixels.to_vec();
-    }
-    let img = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec())
-        .expect("resize_rgba: invalid buffer size");
-    let resized =
-        image::imageops::resize(&img, dst_w, dst_h, image::imageops::FilterType::Lanczos3);
-    resized.into_raw()
-}
-
+#[cfg(feature = "ort-backend")]
 /// RGBA [u8] -> [1, 3, H, W] float32 [0, 1]
 fn rgba_to_tensor(pixels: &[u8], w: usize, h: usize) -> Array4<f32> {
     let mut input = Array4::<f32>::zeros((1, 3, h, w));
@@ -88,6 +49,7 @@ fn rgba_to_tensor(pixels: &[u8], w: usize, h: usize) -> Array4<f32> {
     input
 }
 
+#[cfg(feature = "ort-backend")]
 /// [1, 3, H, W] float32 [0, 1] -> RGBA [u8]
 fn tensor_to_rgba(tensor: &ndarray::ArrayViewD<'_, f32>, w: usize, h: usize) -> Vec<u8> {
     let mut rgba = vec![255u8; w * h * 4];
@@ -102,6 +64,7 @@ fn tensor_to_rgba(tensor: &ndarray::ArrayViewD<'_, f32>, w: usize, h: usize) -> 
     rgba
 }
 
+#[cfg(feature = "ort-backend")]
 fn build_session(path: &str) -> Session {
     Session::builder()
         .unwrap()
@@ -116,7 +79,7 @@ fn build_session(path: &str) -> Session {
 }
 
 /// Scan `assets/models/styles/` for .onnx files, return sorted (name, path) pairs.
-fn scan_model_directory() -> Vec<(String, String)> {
+pub fn scan_model_directory() -> Vec<(String, String)> {
     let model_dir = "assets/models/styles";
     let mut models = Vec::new();
 
@@ -138,9 +101,10 @@ fn scan_model_directory() -> Vec<(String, String)> {
     models
 }
 
-// ===== Setup =====
+// ===== ort setup =====
 
-fn setup_inference_thread(mut commands: Commands, test_mode: Option<Res<TestInferenceMode>>) {
+#[cfg(feature = "ort-backend")]
+fn setup_ort_inference_thread(mut commands: Commands, test_mode: Option<Res<TestInferenceMode>>) {
     let (send_frame, recv_frame) = bounded::<FrameData>(1);
     let (send_styled, recv_styled) = bounded::<StyledFrame>(1);
     let (send_switch, recv_switch) = bounded::<StyleSwitch>(4);
@@ -164,10 +128,10 @@ fn setup_inference_thread(mut commands: Commands, test_mode: Option<Res<TestInfe
     let names: Vec<String> = models.iter().map(|(name, _)| name.clone()).collect();
     let paths: Vec<String> = models.iter().map(|(_, path)| path.clone()).collect();
 
-    info!("Style models: {:?}", names);
+    info!("Style models (ort backend): {:?}", names);
 
     std::thread::spawn(move || {
-        inference_thread_main(recv_frame, send_styled, recv_switch, &paths, is_test, test_done);
+        ort_inference_thread_main(recv_frame, send_styled, recv_switch, &paths, is_test, test_done);
     });
 
     commands.insert_resource(StyleChannels {
@@ -178,9 +142,10 @@ fn setup_inference_thread(mut commands: Commands, test_mode: Option<Res<TestInfe
     commands.insert_resource(CurrentStyle { index: 0, names });
 }
 
-// ===== Inference thread =====
+// ===== ort inference thread =====
 
-fn inference_thread_main(
+#[cfg(feature = "ort-backend")]
+fn ort_inference_thread_main(
     recv: Receiver<FrameData>,
     send: Sender<StyledFrame>,
     recv_switch: Receiver<StyleSwitch>,
@@ -195,7 +160,7 @@ fn inference_thread_main(
     let start_time = std::time::Instant::now();
 
     info!(
-        "Inference thread: {} models available, loading lazily",
+        "Inference thread (ort): {} models available, loading lazily",
         num_models
     );
 
@@ -310,5 +275,5 @@ fn inference_thread_main(
         });
     }
 
-    info!("Inference thread: shutting down");
+    info!("Inference thread (ort): shutting down");
 }

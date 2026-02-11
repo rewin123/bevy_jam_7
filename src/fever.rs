@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use rand::Rng;
 
-use crate::style_transfer::{CurrentStyle, StyleChannels, StyleSwitch};
+use crate::inference_common::{CurrentStyle, StyleChannels, StyleSwitch};
 
 #[derive(Resource)]
 pub struct FeverTimer {

@@ -3,10 +3,13 @@ name = "fever_dream"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["ort-backend"]
+ort-backend = ["dep:ort", "dep:ndarray"]
+burn-backend = ["dep:burn", "dep:burn-import", "dep:burn-store"]
+
 [dependencies]
 bevy = { version = "0.18", features = ["3d"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "ndarray"] }
-ndarray = "0.17"
 crossbeam-channel = "0.5"
 image = "0.25"
 rand = "0.9"
@@ -14,8 +17,24 @@ bevy_camera = "0.18"
 bevy_skein = "0.5"
 avian3d = "0.5"
 
+# ort backend (native, default)
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "ndarray"], optional = true }
+ndarray = { version = "0.17", optional = true }
+
+# burn backend (WASM-compatible) — use git tag v0.20.1 with zip/candle-core compat patches
+burn = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", default-features = false, features = ["ndarray"], optional = true }
+burn-store = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", features = ["burnpack"], optional = true }
+
+[build-dependencies]
+burn-import = { git = "https://github.com/tracel-ai/burn.git", tag = "v0.20.1", optional = true }
+
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.web-release]
+inherits = "release"
+opt-level = "s"
+strip = "debuginfo"
