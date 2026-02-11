@@ -34,3 +34,6 @@ cubecl-fork/*
 !cubecl-fork/crates/
 cubecl-fork/crates/*
 !cubecl-fork/crates/cubecl-wgpu/
+
+# WASM build output
+web/
