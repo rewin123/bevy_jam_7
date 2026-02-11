@@ -27,5 +27,10 @@ training/outputs/
 training/runs/
 
 
-*.pyccubecl-fork/target/
-cubecl-fork/Cargo.lock
+*.pyc
+
+# cubecl-fork: only cubecl-wgpu is needed (patched for wgpu 27)
+cubecl-fork/*
+!cubecl-fork/crates/
+cubecl-fork/crates/*
+!cubecl-fork/crates/cubecl-wgpu/
