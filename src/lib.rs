@@ -14,6 +14,7 @@ pub mod style_transfer;
 pub mod tooltip;
 pub mod triggers;
 pub mod world_layer;
+pub mod movable_platform;
 
 #[cfg(feature = "burn-backend")]
 pub mod burn_style_transfer;

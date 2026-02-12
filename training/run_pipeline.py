@@ -25,6 +25,7 @@ from models.base import SingleFrameStyleModel, SequenceStyleModel
 from models.model5 import Model5
 from models.model5_seq import Model5Seq
 from models.reconet import ReCoNet
+from models.stytr_micro import StyTRMicro
 from datasets.coco import COCODataset
 from datasets.video_flow import SintelDataset, FlyingChairsDataset
 from datasets.balanced_loader import BalancedMultiLoader
@@ -81,7 +82,7 @@ class Timeline:
 
 
 # Model
-MODEL_TYPE = "model5_seq"
+MODEL_TYPE = "stytr_micro"
 
 # Style images: single path, list of paths, or directory
 STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/manga_set")
@@ -111,11 +112,11 @@ GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 bw = 100
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
-content_scale = 1e-0 * 0.5
+content_scale = 1e-1 
 
 # Loss weights (all losses are .mean()-normalized, raw values ~O(1))
 CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
-STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 0.5 * style_scale)])
+STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 10.0 * style_scale)])
 TV_WEIGHT      = Timeline([(400, 0.0), (500, 0.0)])
 PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.0)])
 LAMBDA_F       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 1.0)])
@@ -140,6 +141,8 @@ def build_model(model_type: str):
         return Model5Seq()
     elif model_type == "reconet":
         return ReCoNet()
+    elif model_type == "stytr_micro":
+        return StyTRMicro()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 

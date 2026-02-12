@@ -13,5 +13,6 @@ dependencies = [
     "onnx>=1.14",
     "onnxruntime>=1.15",
     "tqdm",
+    "imageio>=2.8",
     "onnxscript>=0.6.1",
 ]

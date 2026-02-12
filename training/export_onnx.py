@@ -25,7 +25,7 @@ def main():
     parser.add_argument(
         "--model-type",
         default="model5",
-        choices=["model5", "model5_seq", "reconet"],
+        choices=["model5", "model5_seq", "reconet", "stytr_micro"],
         help="Model architecture",
     )
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
@@ -39,6 +39,9 @@ def main():
     elif args.model_type == "model5_seq":
         from models.model5_seq import Model5Seq
         model = Model5Seq()
+    elif args.model_type == "stytr_micro":
+        from models.stytr_micro import StyTRMicro
+        model = StyTRMicro()
     else:
         from models.reconet import ReCoNet
         model = ReCoNet()

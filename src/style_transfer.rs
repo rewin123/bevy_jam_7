@@ -17,7 +17,7 @@ impl Plugin for StyleTransferPlugin {
                 );
                 app.insert_resource(
                     crate::burn_style_transfer::InferenceTimer(Timer::from_seconds(
-                        0.05,
+                        0.01,
                         TimerMode::Repeating,
                     )),
                 );

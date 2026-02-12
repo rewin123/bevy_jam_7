@@ -69,7 +69,7 @@ fn spawn_player(mut commands: Commands) {
             Transform::from_xyz(0.0, 2.0, 0.0),
             Visibility::default(),
             // Physics
-            RigidBody::Kinematic,
+            RigidBody::Kinematic, // Freeze player and wait to level loading, then change to dynamic
             Collider::capsule(0.4, 1.0),
             CollisionLayers::from_bits(1, 1 | (1 << 1)), // member=default, filter=default+world_0
             LockedAxes::ROTATION_LOCKED,

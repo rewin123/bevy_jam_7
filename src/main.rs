@@ -54,6 +54,7 @@ fn main() {
         skybox::SkyboxPlugin,
         tooltip::TooltipPlugin,
         puzzle_objects::PuzzlePlugin,
+        movable_platform::MovablePlatformPlugin,
     ));
 
     if is_test_puzzle {
