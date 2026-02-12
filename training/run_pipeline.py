@@ -105,17 +105,17 @@ BATCH_SIZE = 4
 NUM_WORKERS = 4
 
 # All timelines: list of (step, value) with linear interpolation
-LR             = Timeline([(0, 1e-4)])
+LR             = Timeline([(0, 1e-3)])
 GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 
 bw = 100
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
-content_scale = 1e-1
+content_scale = 1e-0
 
 # Loss weights (all losses are .mean()-normalized, raw values ~O(1))
 CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
-STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 5.0 * style_scale)])
+STYLE_WEIGHT   = Timeline([(bw, 0.0), (bw + 100, 0.5 * style_scale)])
 TV_WEIGHT      = Timeline([(400, 0.0), (500, 0.0)])
 PIXEL_WEIGHT   = Timeline([(0, 1.0), (bw, 1.0), (bw + 100, 0.0)])
 LAMBDA_F       = Timeline([(0, 0.0), (bw, 0.0), (bw + 100, 1.0)])
@@ -318,8 +318,8 @@ def train():
         vgg_out_t1 = vgg(preprocess_for_vgg(out_t1))
 
         vid_c_loss = w_content * (
-            content_loss(vgg_out_t[2], vgg_in_t[2])
-            + content_loss(vgg_out_t1[2], vgg_in_t1[2])
+            content_loss(vgg_out_t[6], vgg_in_t[6])
+            + content_loss(vgg_out_t1[6], vgg_in_t1[6])
         )
         vid_s_loss = w_style * (
             style_loss(vgg_out_t, style_grams)
@@ -360,7 +360,7 @@ def train():
         vgg_in_s = vgg(preprocess_for_vgg(images))
         vgg_out_s = vgg(preprocess_for_vgg(sta_output))
 
-        sta_c_loss = w_content * content_loss(vgg_out_s[2], vgg_in_s[2])
+        sta_c_loss = w_content * content_loss(vgg_out_s[6], vgg_in_s[6])
         sta_s_loss = w_style * style_loss(vgg_out_s, style_grams)
         sta_tv_loss = w_tv * total_variation_loss(sta_output)
         sta_p_loss = w_pixel * pixel_loss(sta_output, images)

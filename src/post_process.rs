@@ -113,7 +113,7 @@ fn setup_render_targets(mut commands: Commands, mut images: ResMut<Assets<Image>
 
     commands.insert_resource(RenderTargetAssigned(false));
     commands.insert_resource(CaptureTimer(Timer::from_seconds(
-        0.1,
+        0.05,
         TimerMode::Repeating,
     )));
     commands.insert_resource(CaptureInFlight(false));

@@ -13,6 +13,7 @@ pub struct Player;
 #[derive(Component)]
 pub struct FpsController {
     pub speed: f32,
+    pub sprint_multiplier: f32,
     pub jump_impulse: f32,
     pub sensitivity: f32,
     pub damping: f32,
@@ -24,6 +25,7 @@ impl Default for FpsController {
     fn default() -> Self {
         Self {
             speed: 30.0,
+            sprint_multiplier: 1.8,
             jump_impulse: 7.0,
             sensitivity: 0.003,
             damping: 0.9,
@@ -76,12 +78,12 @@ fn spawn_player(mut commands: Commands) {
             GravityScale(2.0),
             // Ground detection via shape cast
             ShapeCaster::new(
-                Collider::capsule(0.4 * 0.99, 1.0 * 0.99),
+                Collider::capsule(0.4 * 0.99, 0.4),
                 Vec3::ZERO,
                 Quat::default(),
                 Dir3::NEG_Y,
             )
-            .with_max_distance(0.2),
+            .with_max_distance(10.0),
         ))
         .with_children(|parent| {
             // Camera: layer 0 (shared/UI) + layer 1 (world_0)
@@ -116,12 +118,22 @@ fn grab_cursor(
 
 fn update_grounded(
     mut commands: Commands,
-    query: Query<(Entity, &ShapeHits), With<Player>>,
+    query: Query<(Entity, &ShapeHits, &Rotation), With<Player>>,
 ) {
-    for (entity, hits) in &query {
+    let max_slope_angle = Some((30.0 as avian3d::math::Scalar).to_radians());
+    for (entity, hits, rotation) in &query {
+        // let is_grounded = hits.iter().any(|hit| {
+        //     hit.normal2.angle_between(Vec3::Y).abs() <= 0.8 // ~45 degrees
+        // });
+
         let is_grounded = hits.iter().any(|hit| {
-            hit.normal2.angle_between(Vec3::Y).abs() <= 0.8 // ~45 degrees
+            if let Some(angle) = max_slope_angle {
+                (rotation * -hit.normal2).angle_between(Vec3::Y).abs() <= angle
+            } else {
+                true
+            }
         });
+
         if is_grounded {
             commands.entity(entity).insert(Grounded);
         } else {
@@ -133,7 +145,7 @@ fn update_grounded(
 fn player_movement(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut query: Query<(&FpsController, &mut LinearVelocity, Has<Grounded>), With<Player>>,
+    mut query: Query<(&FpsController, &mut LinearVelocity, &ShapeHits, Option<&Grounded>), With<Player>>,
     mut commands: Commands,
 ) {
     if keys.just_pressed(KeyCode::KeyE) {
@@ -143,7 +155,9 @@ fn player_movement(
     }
 
 
-    for (ctrl, mut lin_vel, is_grounded) in &mut query {
+    for (ctrl, mut lin_vel, hits, grounded) in &mut query {
+        let is_grounded = grounded.is_some();
+
         let yaw_rot = Quat::from_rotation_y(ctrl.yaw);
 
         let mut input_dir = Vec3::ZERO;
@@ -162,8 +176,14 @@ fn player_movement(
         let input_dir = input_dir.normalize_or_zero();
         let world_dir = yaw_rot * input_dir;
 
-        lin_vel.x += world_dir.x * ctrl.speed * time.delta_secs();
-        lin_vel.z += world_dir.z * ctrl.speed * time.delta_secs();
+        let speed = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
+            ctrl.speed * ctrl.sprint_multiplier
+        } else {
+            ctrl.speed
+        };
+
+        lin_vel.x += world_dir.x * speed * time.delta_secs();
+        lin_vel.z += world_dir.z * speed * time.delta_secs();
 
         // Jump
         if keys.just_pressed(KeyCode::Space) && is_grounded {

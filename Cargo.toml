@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["ort-backend"]
+default = ["burn-backend"]
 ort-backend = ["dep:ort", "dep:ndarray"]
 burn-backend = ["dep:burn", "dep:burn-import", "dep:burn-store"]
 
