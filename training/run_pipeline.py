@@ -111,7 +111,7 @@ GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 bw = 100
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
-content_scale = 1e-0
+content_scale = 1e-0 * 0.5
 
 # Loss weights (all losses are .mean()-normalized, raw values ~O(1))
 CONTENT_WEIGHT = Timeline([(bw, 0.0), (bw + 100, 1.0 * content_scale)])
@@ -318,8 +318,8 @@ def train():
         vgg_out_t1 = vgg(preprocess_for_vgg(out_t1))
 
         vid_c_loss = w_content * (
-            content_loss(vgg_out_t[6], vgg_in_t[6])
-            + content_loss(vgg_out_t1[6], vgg_in_t1[6])
+            content_loss(vgg_out_t[2], vgg_in_t[2])
+            + content_loss(vgg_out_t1[2], vgg_in_t1[2])
         )
         vid_s_loss = w_style * (
             style_loss(vgg_out_t, style_grams)
@@ -360,7 +360,7 @@ def train():
         vgg_in_s = vgg(preprocess_for_vgg(images))
         vgg_out_s = vgg(preprocess_for_vgg(sta_output))
 
-        sta_c_loss = w_content * content_loss(vgg_out_s[6], vgg_in_s[6])
+        sta_c_loss = w_content * content_loss(vgg_out_s[2], vgg_in_s[2])
         sta_s_loss = w_style * style_loss(vgg_out_s, style_grams)
         sta_tv_loss = w_tv * total_variation_loss(sta_output)
         sta_p_loss = w_pixel * pixel_loss(sta_output, images)

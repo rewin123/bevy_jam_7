@@ -16,6 +16,8 @@ rand = "0.9"
 bevy_camera = "0.18"
 bevy_skein = "0.5"
 avian3d = "0.5"
+wgpu = "27"
+bytemuck = { version = "1", features = ["derive"] }
 
 # ort backend (native, default)
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "ndarray"], optional = true }

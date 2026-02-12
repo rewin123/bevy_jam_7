@@ -33,6 +33,7 @@ fn main() {
         SkeinPlugin::default(),
         player::PlayerPlugin,
         level::LevelPlugin,
+        gpu_bridge::GpuBridgePlugin, // Must be before StyleTransferPlugin (provides SharedBurnDevice)
         style_transfer::StyleTransferPlugin,
         post_process::PostProcessPlugin,
         fever::FeverPlugin,

@@ -2,6 +2,7 @@
 
 pub mod inference_common;
 pub mod fever;
+pub mod gpu_bridge;
 pub mod interaction;
 pub mod level;
 pub mod player;

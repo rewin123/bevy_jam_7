@@ -118,12 +118,11 @@ fn main() {
         "fn load_burn_models(device: &<BurnBackend as burn::prelude::Backend>::Device) -> Vec<BurnModelWrapper> {{"
     )
     .unwrap();
-    writeln!(f, "    let _ = device;").unwrap();
     writeln!(f, "    vec![").unwrap();
     for stem in &model_stems {
         writeln!(
             f,
-            "        BurnModelWrapper::{}(burn_model_{}::Model::default()),",
+            "        BurnModelWrapper::{}(burn_model_{}::Model::from_embedded(device)),",
             to_pascal_case(stem),
             stem
         )
