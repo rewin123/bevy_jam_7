@@ -33,17 +33,25 @@ impl Plugin for PostProcessPlugin {
 
         // WASM still uses Screenshot-based capture + channels
         #[cfg(all(target_arch = "wasm32", feature = "burn-backend"))]
-        app.add_systems(
-            Update,
-            (wasm_periodic_capture, wasm_receive_styled_frame).chain(),
-        );
+        {
+            app.insert_resource(CaptureTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
+            app.insert_resource(CaptureInFlight(false));
+            app.add_systems(
+                Update,
+                (wasm_periodic_capture, wasm_receive_styled_frame).chain(),
+            );
+        }
 
         // ort backend still uses Screenshot-based capture + channels
         #[cfg(feature = "ort-backend")]
-        app.add_systems(
-            Update,
-            (ort_periodic_capture, ort_receive_styled_frame).chain(),
-        );
+        {
+            app.insert_resource(CaptureTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
+            app.insert_resource(CaptureInFlight(false));
+            app.add_systems(
+                Update,
+                (ort_periodic_capture, ort_receive_styled_frame).chain(),
+            );
+        }
 
         // WebGL lacks TEXTURE_FORMAT_16BIT_NORM
         #[cfg(target_arch = "wasm32")]

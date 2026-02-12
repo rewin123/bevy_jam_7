@@ -13,21 +13,33 @@ fn main() {
     let is_test_inference = std::env::args().any(|a| a == "--test-inference");
     let is_test_puzzle = std::env::args().any(|a| a == "--test-puzzle");
 
-    app.add_plugins(
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Fever Dream".into(),
-                    resolution: (1280u32, 720u32).into(),
-                    ..default()
-                }),
-                ..default()
-            })
-            .set(LogPlugin {
-                filter: "ort=error".into(),
+    let default_plugins = DefaultPlugins
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Fever Dream".into(),
+                resolution: (1280u32, 720u32).into(),
                 ..default()
             }),
-    )
+            ..default()
+        })
+        .set(LogPlugin {
+            filter: "ort=error".into(),
+            ..default()
+        });
+
+    // On WASM: force WebGPU backend (not WebGL) so compute shaders & storage buffers work.
+    // This enables the GPU bridge for zero-copy style transfer on the web.
+    #[cfg(target_arch = "wasm32")]
+    let default_plugins = default_plugins.set(bevy::render::RenderPlugin {
+        render_creation: bevy::render::settings::WgpuSettings {
+            backends: Some(wgpu::Backends::BROWSER_WEBGPU),
+            ..default()
+        }
+        .into(),
+        ..default()
+    });
+
+    app.add_plugins(default_plugins)
     .add_plugins((
         PhysicsPlugins::default(),
         SkeinPlugin::default(),

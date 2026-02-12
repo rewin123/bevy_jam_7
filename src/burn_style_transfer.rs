@@ -508,6 +508,7 @@ enum WasmInitPhase {
 #[cfg(target_arch = "wasm32")]
 pub struct BurnWasmState {
     phase: Arc<Mutex<WasmInitPhase>>,
+    device: Arc<Mutex<Option<burn::backend::wgpu::WgpuDevice>>>,
     current: usize,
     recv_frame: Receiver<FrameData>,
     send_styled: Sender<StyledFrame>,
@@ -524,10 +525,12 @@ unsafe impl Sync for BurnWasmState {}
 #[cfg(target_arch = "wasm32")]
 impl Resource for BurnWasmState {}
 
-/// Setup burn inference for WASM — async device init + model loading
+/// Setup burn inference for WASM — uses shared GPU device if available (WebGPU),
+/// otherwise falls back to async device init.
 #[cfg(target_arch = "wasm32")]
 pub fn setup_burn_inference_wasm(
     mut commands: Commands,
+    shared_device: Option<Res<crate::gpu_bridge::SharedBurnDevice>>,
     test_mode: Option<Res<TestInferenceMode>>,
 ) {
     let (send_frame, recv_frame) = bounded::<FrameData>(1);
@@ -544,26 +547,41 @@ pub fn setup_burn_inference_wasm(
 
     let phase = Arc::new(Mutex::new(WasmInitPhase::Initializing));
     let phase_clone = phase.clone();
+    let device_holder = Arc::new(Mutex::new(None::<burn::backend::wgpu::WgpuDevice>));
+    let device_holder_clone = device_holder.clone();
 
-    wasm_bindgen_futures::spawn_local(async move {
-        use burn::backend::wgpu::graphics::AutoGraphicsApi;
-        use burn::backend::wgpu::{init_setup_async, RuntimeOptions};
-
-        let device = burn::backend::wgpu::WgpuDevice::default();
-        info!("WASM: initializing wgpu device async...");
-
-        let _setup =
-            init_setup_async::<AutoGraphicsApi>(&device, RuntimeOptions::default()).await;
-        info!("WASM: wgpu device initialized");
-
+    if let Some(shared) = shared_device {
+        // WebGPU: use shared device from GpuBridgePlugin (same GPU context as Bevy)
+        let device = shared.0.clone();
+        info!("WASM: using shared GPU device {:?}", device);
         let models = load_burn_models(&device);
-        info!("WASM: {} burn models loaded", models.len());
-
+        info!("WASM: {} burn models loaded on shared device", models.len());
+        *device_holder.lock().unwrap() = Some(device);
         *phase_clone.lock().unwrap() = WasmInitPhase::Ready(models);
-    });
+    } else {
+        // WebGL fallback: async device init (separate GPU context)
+        wasm_bindgen_futures::spawn_local(async move {
+            use burn::backend::wgpu::graphics::AutoGraphicsApi;
+            use burn::backend::wgpu::{init_setup_async, RuntimeOptions};
+
+            let device = burn::backend::wgpu::WgpuDevice::default();
+            info!("WASM: initializing wgpu device async...");
+
+            let _setup =
+                init_setup_async::<AutoGraphicsApi>(&device, RuntimeOptions::default()).await;
+            info!("WASM: wgpu device initialized");
+
+            let models = load_burn_models(&device);
+            info!("WASM: {} burn models loaded", models.len());
+
+            *device_holder_clone.lock().unwrap() = Some(device);
+            *phase_clone.lock().unwrap() = WasmInitPhase::Ready(models);
+        });
+    }
 
     commands.insert_resource(BurnWasmState {
         phase,
+        device: device_holder,
         current: 0,
         recv_frame,
         send_styled,
@@ -615,9 +633,13 @@ pub fn burn_wasm_inference_system(mut state: ResMut<BurnWasmState>) {
             _ => return,
         };
 
+        let device_guard = state.device.lock().unwrap();
+        let Some(ref device) = *device_guard else {
+            return;
+        };
+
         let w = RENDER_WIDTH as usize;
         let h = RENDER_HEIGHT as usize;
-        let device = burn::backend::wgpu::WgpuDevice::default();
         let resized = resize_rgba(
             &frame.pixels,
             frame.width,
@@ -626,7 +648,7 @@ pub fn burn_wasm_inference_system(mut state: ResMut<BurnWasmState>) {
             RENDER_HEIGHT,
         );
 
-        let input = rgba_to_burn_tensor(&resized, w, h, &device);
+        let input = rgba_to_burn_tensor(&resized, w, h, device);
         let model_idx = state.current % models.len();
         run_burn_inference(&models[model_idx], input)
     };
