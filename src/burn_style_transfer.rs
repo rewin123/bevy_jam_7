@@ -245,43 +245,76 @@ pub fn gpu_style_transfer_system(
         info!("Debug dump: saved to /tmp/debug_input.png and /tmp/debug_output.png");
     }
 
-    // ── Step 5+6: Convert output tensor to RGBA8 and write to display texture ──
-    //
-    // Log tensor layout for diagnostics (first frame only via static flag).
+    // ── Step 5: Get output tensor's raw buffer, run f32→RGBA8 compute ──
+    let output_primitive = output_tensor.into_primitive().tensor();
+
+    // Log tensor layout once for diagnostics
     {
         use std::sync::atomic::{AtomicBool, Ordering as AO};
         static LOGGED: AtomicBool = AtomicBool::new(false);
         if !LOGGED.swap(true, AO::Relaxed) {
-            let peek = output_tensor.clone().into_primitive().tensor();
             info!(
                 "Output tensor layout: shape={:?}, strides={:?}, is_contiguous={}, dtype={:?}",
-                peek.shape.dims,
-                peek.strides,
-                peek.is_contiguous(),
-                peek.dtype,
+                output_primitive.shape.dims,
+                output_primitive.strides,
+                output_primitive.is_contiguous(),
+                output_primitive.dtype,
             );
         }
     }
 
-    // Read back output via into_data() (handles non-contiguous strides correctly)
-    // then convert CHW f32 → RGBA8 on CPU and upload to display texture.
-    let output_data = output_tensor.into_data();
-    let values: Vec<f32> = output_data.to_vec().unwrap();
-    let total = (w * h) as usize;
-    let mut rgba = vec![255u8; total * 4];
-    for i in 0..total {
-        rgba[i * 4] = (values[i].clamp(0.0, 1.0) * 255.0) as u8;
-        rgba[i * 4 + 1] = (values[total + i].clamp(0.0, 1.0) * 255.0) as u8;
-        rgba[i * 4 + 2] = (values[2 * total + i].clamp(0.0, 1.0) * 255.0) as u8;
-    }
+    // CRITICAL: Flush cubecl's batched GPU commands (inference dispatches) so they
+    // are submitted to the wgpu queue BEFORE our output processing commands.
+    output_primitive.client.flush();
 
-    // Upload RGBA8 to display texture via buffer copy
-    gpu.queue.write_buffer(&pipelines.output_rgba_buffer, 0, &rgba);
+    // Update stride params so the f32→RGBA8 shader can handle any tensor layout
+    // (e.g., NHWC strides from burn's conv2d output)
+    let stride_c = output_primitive.strides[1] as u32;
+    let stride_h = output_primitive.strides[2] as u32;
+    let stride_w = output_primitive.strides[3] as u32;
+    crate::gpu_bridge::update_output_strides(&gpu.queue, &pipelines, stride_c, stride_h, stride_w);
+
+    let output_binding = output_primitive.handle.clone().binding();
+    let output_resource = output_primitive.client.get_resource(output_binding);
+    let output_wgpu = output_resource.resource();
+
+    // Create a bind group that binds the burn output buffer as input
+    let f32_to_rgba8_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("f32_to_rgba8_output_bg"),
+        layout: &pipelines.f32_to_rgba8_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &output_wgpu.buffer,
+                    offset: output_wgpu.offset,
+                    size: std::num::NonZeroU64::new(output_wgpu.size),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: pipelines.output_rgba_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: pipelines.params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("style_output"),
         });
+
+    crate::gpu_bridge::dispatch_f32_to_rgba8(
+        &mut encoder,
+        &pipelines.f32_to_rgba8_pipeline,
+        &f32_to_rgba8_bind_group,
+    );
+
+    // ── Step 6: Copy output RGBA buffer → display texture ──
     crate::gpu_bridge::copy_staging_to_texture(
         &mut encoder,
         &pipelines.output_rgba_buffer,
@@ -289,6 +322,7 @@ pub fn gpu_style_transfer_system(
         w,
         h,
     );
+
     gpu.queue.submit(std::iter::once(encoder.finish()));
 
     in_flight.0 = false;

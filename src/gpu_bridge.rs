@@ -216,13 +216,19 @@ fn create_format_conversion_pipelines(
 
     let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("style_params"),
-        size: 8, // 2 × u32
+        size: 32, // 8 × u32 (padded to 16-byte alignment)
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    // Write params
-    queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&[w, h]));
+    // Write initial params (strides will be updated per-frame for f32→RGBA8)
+    // [width, height, stride_c, stride_h, stride_w, 0, 0, 0]
+    let total = w * h;
+    queue.write_buffer(
+        &params_buffer,
+        0,
+        bytemuck::bytes_of(&[w, h, total, w, 1u32, 0u32, 0u32, 0u32]),
+    );
 
     // ── RGBA8 → f32 CHW pipeline ──
     let rgba8_to_f32_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -510,12 +516,32 @@ pub fn dispatch_f32_to_rgba8(
     pass.dispatch_workgroups(workgroup_count, 1, 1);
 }
 
+/// Update the stride parameters in the params buffer for the f32→RGBA8 shader.
+/// Strides come from the burn output tensor's CubeTensor.
+pub fn update_output_strides(
+    queue: &wgpu::Queue,
+    pipelines: &FormatConversionPipelines,
+    stride_c: u32,
+    stride_h: u32,
+    stride_w: u32,
+) {
+    // Write strides at offset 8 (after width and height)
+    queue.write_buffer(
+        &pipelines.params_buffer,
+        8,
+        bytemuck::bytes_of(&[stride_c, stride_h, stride_w]),
+    );
+}
+
 // ── WGSL compute shaders (inlined) ────────────────────────────────
 
 const RGBA8_TO_F32_WGSL: &str = r#"
 struct Params {
     width: u32,
     height: u32,
+    stride_c: u32,
+    stride_h: u32,
+    stride_w: u32,
 }
 
 @group(0) @binding(0) var<storage, read> input: array<u32>;
@@ -534,7 +560,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // byte order (little-endian): byte0=R, byte1=G, byte2=B, byte3=A
     let rgba = unpack4x8unorm(input[pixel]);
 
-    // Write CHW layout: [1, 3, H, W]
+    // Write contiguous CHW layout: [1, 3, H, W]
     // Channel 0 (R) at offset 0
     // Channel 1 (G) at offset total
     // Channel 2 (B) at offset 2*total
@@ -548,6 +574,9 @@ const F32_TO_RGBA8_WGSL: &str = r#"
 struct Params {
     width: u32,
     height: u32,
+    stride_c: u32,
+    stride_h: u32,
+    stride_w: u32,
 }
 
 @group(0) @binding(0) var<storage, read> input: array<f32>;
@@ -562,10 +591,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Read CHW layout
-    let r = clamp(input[pixel], 0.0, 1.0);
-    let g = clamp(input[total + pixel], 0.0, 1.0);
-    let b = clamp(input[2u * total + pixel], 0.0, 1.0);
+    // Compute 2D position from flat pixel index
+    let y = pixel / params.width;
+    let x = pixel % params.width;
+
+    // Read using tensor strides (handles both NCHW and NHWC layouts)
+    // Element [0, c, y, x] = offset c*stride_c + y*stride_h + x*stride_w
+    let base = y * params.stride_h + x * params.stride_w;
+    let r = clamp(input[base], 0.0, 1.0);
+    let g = clamp(input[base + params.stride_c], 0.0, 1.0);
+    let b = clamp(input[base + 2u * params.stride_c], 0.0, 1.0);
 
     // pack4x8unorm: vec4<f32> [0,1] → u32 packed RGBA8
     output[pixel] = pack4x8unorm(vec4(r, g, b, 1.0));
