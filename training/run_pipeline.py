@@ -82,10 +82,10 @@ class Timeline:
 
 
 # Model
-MODEL_TYPE = "stytr_micro"
+MODEL_TYPE = "model5_seq"
 
 # Style images: single path, list of paths, or directory
-STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/manga_set")
+STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/candy.jpg")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
@@ -102,14 +102,14 @@ TENSORBOARD_DIR = "runs"
 
 # Training
 TOTAL_STEPS = 50_000
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 NUM_WORKERS = 4
 
 # All timelines: list of (step, value) with linear interpolation
-LR             = Timeline([(0, 1e-3)])
+LR             = Timeline([(0, 1e-3), (25000, 5e-5)])
 GRAD_MAX_NORM  = Timeline([(0, 10.0)])
 
-bw = 100
+bw = 500
 
 style_scale = 1e3 # Style has different scaling, we need this parameter 
 content_scale = 1e-1 

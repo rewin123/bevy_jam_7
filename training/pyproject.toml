@@ -15,4 +15,5 @@ dependencies = [
     "tqdm",
     "imageio>=2.8",
     "onnxscript>=0.6.1",
+    "onnxsim>=0.4",
 ]

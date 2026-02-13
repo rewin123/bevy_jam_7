@@ -66,13 +66,31 @@ fn main() {
 
         let out_subdir = format!("burn_models/{}", rust_name);
 
-        ModelGen::new()
-            .input(onnx_path.to_str().unwrap())
-            .out_dir(&out_subdir)
-            .embed_states(true)
-            .run_from_script();
+        // Some ONNX models use ops burn-import can't convert (e.g. dynamic Reshape
+        // via Concat of scalar int64s in attention/interpolate layers). Catch panics
+        // so the build continues — those models will only be available on ORT backend.
+        let input_str = onnx_path.to_str().unwrap().to_string();
+        let out_subdir_clone = out_subdir.clone();
+        let result = std::panic::catch_unwind(move || {
+            ModelGen::new()
+                .input(&input_str)
+                .out_dir(&out_subdir_clone)
+                .embed_states(true)
+                .run_from_script();
+        });
 
-        model_stems.push(rust_name);
+        match result {
+            Ok(()) => model_stems.push(rust_name),
+            Err(_) => {
+                println!(
+                    "cargo:warning=SKIPPED '{}': burn-import cannot convert this model (unsupported ONNX ops). It will only work on ORT backend.",
+                    rust_name
+                );
+                // Clean up partial output
+                let partial_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join(&out_subdir);
+                let _ = fs::remove_dir_all(&partial_dir);
+            }
+        }
     }
 
     // Generate the glue module that imports all models and provides dispatch

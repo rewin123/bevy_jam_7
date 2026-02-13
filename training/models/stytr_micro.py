@@ -160,11 +160,14 @@ class StyTRMicro(SequenceStyleModel):
 
         # --- Transformer: 2 layers, 4 heads, FFN ratio 2 ---
         self.transformer = nn.ModuleList(
-            [TransformerLayer(48, num_heads=4, ffn_ratio=2) for _ in range(2)]
+            [TransformerLayer(48, num_heads=4, ffn_ratio=2) for _ in range(1)]
         )
 
         # --- Local texture: 1× InvertedBottleneck (dilation=2 for RF) ---
-        self.residual = InvertedBottleneck(48, 144, dilation=2)
+        self.residual = nn.Sequential(
+            InvertedBottleneck(48, 96, dilation=1),
+            InvertedBottleneck(48, 144, dilation=2),
+        )
 
         # --- Decoder: 48→3ch @ full resolution ---
         self.decoder = nn.Sequential(

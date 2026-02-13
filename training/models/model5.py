@@ -32,17 +32,17 @@ class InvertedBottleneck(nn.Module):
         self.block = nn.Sequential(
             # Expand: 32->192, 6144 params
             nn.Conv2d(channels, expanded, 1, bias=False),
-            nn.InstanceNorm2d(expanded, affine=True),  # 384 params
+            # nn.InstanceNorm2d(expanded, affine=True),  # 384 params
             nn.SiLU(inplace=True),
             # Depthwise: 192 dw, 1728 params (dilation increases RF, 0 extra params)
             nn.ReflectionPad2d(pad),
             nn.Conv2d(expanded, expanded, 3, groups=expanded, bias=False,
                       dilation=dilation),
-            nn.InstanceNorm2d(expanded, affine=True),  # 384 params
+            # nn.InstanceNorm2d(expanded, affine=True),  # 384 params
             nn.SiLU(inplace=True),
             # Compress: 192->32, 6144 params
             nn.Conv2d(expanded, channels, 1, bias=False),
-            nn.InstanceNorm2d(channels, affine=True),  # 64 params
+            # nn.InstanceNorm2d(channels, affine=True),  # 64 params
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
