@@ -87,7 +87,6 @@ class Model5Seq(SequenceStyleModel):
             nn.SiLU(inplace=True),
         )
 
-        self.attn = LinearSpatialAttention(in_channels=16, dim=4)
         # Dilated residual stack: dilation 1, 2, 4 for large receptive field
         self.residual = nn.Sequential(
             InvertedBottleneck(64, 192, dilation=1),

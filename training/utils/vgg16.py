@@ -17,7 +17,7 @@ class VGG16Features(nn.Module):
     Input must be ImageNet-normalized (use preprocess_for_vgg from losses.py).
     """
 
-    LAYERS_OF_INTEREST = {3, 8, 15, 22, 24, 26, 29}
+    LAYERS_OF_INTEREST = {3, 8, 15, 22, 24, 26}
 
     def __init__(self, weights_path: str | None = None):
         super().__init__()

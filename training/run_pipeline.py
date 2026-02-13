@@ -85,7 +85,7 @@ class Timeline:
 MODEL_TYPE = "model5_seq"
 
 # Style images: single path, list of paths, or directory
-STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/candy.jpg")
+STYLE_IMAGES = os.path.join(_PROJECT_DIR, "assets/styles/picasso")
 
 # Dataset paths
 COCO_DIR = "data/coco2017/val2017"
