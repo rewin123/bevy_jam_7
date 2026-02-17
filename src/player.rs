@@ -48,7 +48,7 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_player).add_systems(
-            Update,
+            FixedUpdate,
             (grab_cursor, update_grounded, player_look, player_movement).chain(),
         );
 
@@ -83,7 +83,7 @@ fn spawn_player(mut commands: Commands) {
                 Quat::default(),
                 Dir3::NEG_Y,
             )
-            .with_max_distance(0.2),
+            .with_max_distance(0.4),
         ))
         .with_children(|parent| {
             // Camera: layer 0 (shared/UI) + layer 1 (world_0)
