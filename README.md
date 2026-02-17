@@ -7,5 +7,7 @@ https://prildarill.itch.io/meow
 
 
 cargo run --release
+
 or
+
 bevy run --release -yes web --wasm-opt=false
