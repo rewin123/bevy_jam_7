@@ -26,7 +26,7 @@ impl Default for FpsController {
         Self {
             speed: 30.0,
             sprint_multiplier: 1.8,
-            jump_impulse: 7.0,
+            jump_impulse: 7.0 / 1.5,
             sensitivity: 0.003,
             damping: 0.9,
             pitch: 0.0,
@@ -73,17 +73,17 @@ fn spawn_player(mut commands: Commands) {
             Collider::capsule(0.4, 1.0),
             CollisionLayers::from_bits(1, 1 | (1 << 1)), // member=default, filter=default+world_0
             LockedAxes::ROTATION_LOCKED,
-            Friction::ZERO.with_combine_rule(CoefficientCombine::Min),
+            Friction::new(2.0),
             Restitution::ZERO.with_combine_rule(CoefficientCombine::Min),
-            GravityScale(2.0),
+            GravityScale(1.0),
             // Ground detection via shape cast
             ShapeCaster::new(
-                Collider::capsule(0.4 * 0.99, 0.4),
+                Collider::capsule(0.4 * 0.99, 0.99),
                 Vec3::ZERO,
                 Quat::default(),
                 Dir3::NEG_Y,
             )
-            .with_max_distance(10.0),
+            .with_max_distance(0.2),
         ))
         .with_children(|parent| {
             // Camera: layer 0 (shared/UI) + layer 1 (world_0)
@@ -191,8 +191,10 @@ fn player_movement(
         }
 
         // XZ damping
-        lin_vel.x *= ctrl.damping;
-        lin_vel.z *= ctrl.damping;
+        if !is_grounded {
+            lin_vel.x *= ctrl.damping;
+            lin_vel.z *= ctrl.damping;
+        }
     }
 }
 

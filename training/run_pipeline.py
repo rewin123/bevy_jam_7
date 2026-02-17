@@ -103,7 +103,7 @@ TENSORBOARD_DIR = "runs"
 # Training
 TOTAL_STEPS = 50_000
 BATCH_SIZE = 8
-NUM_WORKERS = 4
+NUM_WORKERS = 8
 
 # All timelines: list of (step, value) with linear interpolation
 LR             = Timeline([(0, 1e-3), (25000, 5e-5)])
